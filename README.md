@@ -109,7 +109,7 @@ The server expects:
 network/certificates/gosredirector.pfx
 ```
 
-**The certificate is not included in this repo, use the Bug_OldProtoSSL github repo from Aim4kill**
+**The certificate is not included in this repo, use the Bug_OldProtoSSL guide from Aim4Kill's github**
 
 The certificate is loaded from the PFX file at runtime.
 
