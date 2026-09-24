@@ -30,8 +30,8 @@ func BuildGetServerInstanceResponse(messageID uint32) []byte {
 	WriteUInt32(payload, "DNST", 0)
 	// MESS = messages[]
 	messages := [][]byte{
-		encodeStringElement("@ByxkDev"),
-		encodeStringElement("Welcome To Syntax!"),
+		encodeStringElement("Hello World"),
+		encodeStringElement("Welcome To Battlefield 4!"),
 	}
 	WriteList(payload, "MESS", TDF_STRING, messages)
 	// NREM = NameRemapEntry[]
