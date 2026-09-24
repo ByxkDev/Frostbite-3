@@ -1,3 +1,5 @@
+**Syntax BF4 Discord Server:** https://discord.gg/pFaTAHA7dg
+
 # BF4 Blaze Emulator
 
 ![Status](https://img.shields.io/badge/status-WIP-orange)
