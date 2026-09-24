@@ -11,7 +11,7 @@ const (
 )
 
 const (
-	GameServerIP   = "151.244.72.66"
+	GameServerIP   = "151.xxx.xxx.xx"
 	GameServerPort uint16 = 33152
 )
 
