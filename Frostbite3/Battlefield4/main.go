@@ -21,7 +21,7 @@ const (
 	RedirectorPort      = 42127
 	GameServerHostname  = "151.xxx.xxx.xx"
 	GameServerPort      = 33152
-	CertificatePath     = "network/certificates/gosredirector_mod.pfx"
+	CertificatePath     = "network/certificates/gosredirector.pfx"
 	CertificatePassword = "password"
 )
 
