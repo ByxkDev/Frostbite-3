@@ -20,10 +20,10 @@ import (
 const (
 	RedirectorHostname  = "gosredirector.ea.com"
 	RedirectorPort      = 42127
-	BlazeServerHostname = "151.244.72.66"
+	BlazeServerHostname = "151.xxx.xxx.xx"
 	BlazeServerPort     = 33152
 	CertificatePath     = "network/certificates/gosredirector_mod.pfx"
-	CertificatePassword = "123456"
+	CertificatePassword = "password"
 )
 
 func loadPFX(path, password string) (tls.Certificate, error) {
