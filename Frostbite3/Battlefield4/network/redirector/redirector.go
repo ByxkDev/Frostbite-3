@@ -1,8 +1,10 @@
-package blaze
+package redirector
 
 import (
 	"bytes"
 	"encoding/binary"
+
+	"bf4/blaze"
 )
 
 const (
@@ -11,42 +13,42 @@ const (
 )
 
 const (
-	GameServerIP   = "151.xxx.xxx.xx"
-	GameServerPort uint16 = 33152
+	BlazeServerIP   = "151.xxx.xxx.xx"
+	BlazeServerPort uint16 = 33152
 )
 
-func BuildGetServerInstanceResponse(messageID uint32) []byte {
+func BuildGetServerInstanceResponse(messageID uint32, clientType string) []byte {
 	payload := bytes.NewBuffer(nil)
-	// ADDR = ServerAddress
+
 	address := bytes.NewBuffer(nil)
-	// IpAddress
-	WriteTDF(address, "HOST", GameServerIP)
-	WriteUInt32(address, "IP", GameServerIPUInt())
-	WriteUInt16(address, "PORT", GameServerPort)
-	WriteStruct(payload, "ADDR", address.Bytes())
-	// AREM = AddressRemapEntry[]
-	WriteList(payload, "AREM", TDF_STRUCT, nil)
-	// DNST = default DNS address
-	WriteUInt32(payload, "DNST", 0)
-	// MESS = messages[]
+
+	blaze.WriteTDF(address, "HOST", BlazeServerIP)
+	blaze.WriteUInt32(address, "IP", GameServerIPUInt())
+	blaze.WriteUInt16(address, "PORT", BlazeServerPort)
+	blaze.WriteStruct(payload, "ADDR", address.Bytes())
+
+	blaze.WriteList(payload, "AREM", blaze.TDF_STRUCT, nil)
+	blaze.WriteUInt32(payload, "DNST", 0)
+
 	messages := [][]byte{
 		encodeStringElement("Hello World"),
 		encodeStringElement("Welcome To Battlefield 4!"),
 	}
-	WriteList(payload, "MESS", TDF_STRING, messages)
-	// NREM = NameRemapEntry[]
-	WriteList(payload, "NREM", TDF_STRUCT, nil)
-	// SECU = secure
-	WriteBool(payload, "SECU", false)
 
-	return EncodePacket(RedirectorComponent, GetServerInstance, 0, messageID, payload.Bytes(),)
+	blaze.WriteList(payload, "MESS", blaze.TDF_STRING, messages)
+	blaze.WriteList(payload, "NREM", blaze.TDF_STRUCT, nil)
+	blaze.WriteBool(payload, "SECU", false)
+
+	return blaze.EncodePacket(RedirectorComponent, GetServerInstance, 0, messageID, payload.Bytes(),)
 }
 
 func encodeStringElement(value string) []byte {
 	buf := bytes.NewBuffer(nil)
+
 	binary.Write(buf, binary.BigEndian, uint32(len(value)+1))
 	buf.WriteString(value)
 	buf.WriteByte(0)
+
 	return buf.Bytes()
 }
 
