@@ -13,29 +13,25 @@ const (
 	Authentication uint16 = 1
 	Redirector     uint16 = 5
 	Util           uint16 = 9
-	ClientConfig   uint16 = 470
 )
 
 func HandlePacket(data []byte) []byte {
 	packet := blaze.Parse(data)
 
-	fmt.Printf("[BLAZE] Component=%d Command=%d Size=%d Type=0x%04X MessageId=%d\n", packet.Component, packet.Command, len(data), packet.Type, packet.MessageId,)
+	fmt.Printf("[BLAZE] Component=%d Command=%d Size=%d Type=0x%04X MessageId=%d\n", packet.Component, packet.Command, len(data), packet.Type, packet.MessageId)
 
 	switch packet.Component {
-	case 5:
+	case Redirector:
 		return HandleRedirector(packet)
 
-	case 1:
+	case Authentication:
 		return HandleAuthentication(packet)
 
-	case 9:
+	case Util:
 		return HandleUtil(packet)
 
-	case 470:
-		return HandleClientConfig(packet, data)
-
 	default:
-		fmt.Printf("[BLAZE] Unknown component: %d command: %d\n", packet.Component, packet.Command,)
+		fmt.Printf("[BLAZE] Unknown component: %d command: %d\n", packet.Component, packet.Command)
 		fmt.Printf("[BLAZE] Raw: %x\n", data)
 		return nil
 	}
@@ -51,13 +47,13 @@ func HandleRedirector(packet blaze.Packet) []byte {
 		fmt.Println("[BLAZE] Redirector GetServerInstance")
 		fmt.Printf("[BLAZE] Client Type: %q\n", clientType)
 
-		response := redirector.BuildGetServerInstanceResponse(packet.MessageId, clientType,)
-		fmt.Printf("[BLAZE] Redirector response: %d bytes\n", len(response),)
+		response := redirector.BuildGetServerInstanceResponse(packet.MessageId, clientType)
+		fmt.Printf("[BLAZE] Redirector response: %d bytes\n", len(response))
 
 		return response
 
 	default:
-		fmt.Printf("[BLAZE] Unknown Redirector command: %d\n", packet.Command,)
+		fmt.Printf("[BLAZE] Unknown Redirector command: %d\n", packet.Command)
 		return nil
 	}
 }
@@ -81,17 +77,17 @@ func HandleAuthentication(packet blaze.Packet) []byte {
 	case 7:
 		fmt.Println("[BLAZE] Authentication PreAuth")
 		response := utilities.BuildPreAuthResponse(packet.MessageId)
-		fmt.Printf("[BLAZE] Authentication PreAuth response: %d bytes\n", len(response),)
+		fmt.Printf("[BLAZE] Authentication PreAuth response: %d bytes\n", len(response))
 		return response
 
 	case 8:
 		fmt.Println("[BLAZE] Authentication PostAuth")
 		response := utilities.BuildPreAuthResponse(packet.MessageId)
-		fmt.Printf("[BLAZE] Authentication PostAuth response: %d bytes\n", len(response),)
+		fmt.Printf("[BLAZE] Authentication PostAuth response: %d bytes\n", len(response))
 		return response
 
 	default:
-		fmt.Printf("[BLAZE] Unknown Authentication command: %d\n", packet.Command,)
+		fmt.Printf("[BLAZE] Unknown Authentication command: %d\n", packet.Command)
 		return nil
 	}
 }
@@ -102,14 +98,14 @@ func HandleUtil(packet blaze.Packet) []byte {
 	switch packet.Command {
 	case 1:
 		fmt.Println("[BLAZE] Util FetchClientConfig")
-        response := utilities.BuildFetchClientConfigResponse(packet.MessageId, packet.Payload)
-		fmt.Printf("[BLAZE] Util FetchClientConfig response: %d bytes\n", len(response),)
+		response := utilities.BuildFetchClientConfigResponse(packet.MessageId, packet.Payload)
+		fmt.Printf("[BLAZE] Util FetchClientConfig response: %d bytes\n", len(response))
 		return response
 
 	case 2:
 		fmt.Println("[BLAZE] Util Ping")
 		response := utilities.BuildPingResponse(packet.MessageId)
-		fmt.Printf("[BLAZE] Util Ping response: %d bytes\n", len(response),)
+		fmt.Printf("[BLAZE] Util Ping response: %d bytes\n", len(response))
 		return response
 
 	case 5:
@@ -119,13 +115,13 @@ func HandleUtil(packet blaze.Packet) []byte {
 	case 7:
 		fmt.Println("[BLAZE] Util PreAuth")
 		response := utilities.BuildPreAuthResponse(packet.MessageId)
-		fmt.Printf("[BLAZE] Util PreAuth response: %d bytes\n", len(response),)
+		fmt.Printf("[BLAZE] Util PreAuth response: %d bytes\n", len(response))
 		return response
 
 	case 8:
 		fmt.Println("[BLAZE] Util PostAuth")
 		response := utilities.BuildPreAuthResponse(packet.MessageId)
-		fmt.Printf("[BLAZE] Util PostAuth response: %d bytes\n", len(response),)
+		fmt.Printf("[BLAZE] Util PostAuth response: %d bytes\n", len(response))
 		return response
 
 	case 22:
@@ -133,24 +129,7 @@ func HandleUtil(packet blaze.Packet) []byte {
 		return nil
 
 	default:
-		fmt.Printf("[BLAZE] Unknown Util command: %d\n", packet.Command,)
-		return nil
-	}
-}
-
-func HandleClientConfig(packet blaze.Packet, data []byte) []byte {
-	fmt.Printf("[BLAZE] Component 470 Command=%d\n", packet.Command,)
-
-	switch packet.Command {
-	case 5:
-		fmt.Println("[BLAZE] Component 470 Command 5 received")
-		response := utilities.BuildPreAuthResponse(packet.MessageId)
-		fmt.Printf("[BLAZE] Component 470 response: %d bytes\n", len(response),)
-		return response
-
-	default:
-		fmt.Printf("[BLAZE] Unknown component 470 command: %d\n", packet.Command,)
-		fmt.Printf("[BLAZE] Raw: %x\n", data)
+		fmt.Printf("[BLAZE] Unknown Util command: %d\n", packet.Command)
 		return nil
 	}
 }
