@@ -219,7 +219,7 @@ The main server starts both services:
 
 ```go
 go startRedirector()
-go startGameServer()
+go startBlazeServer()
 ```
 
 The redirector listens on:
@@ -228,7 +228,7 @@ The redirector listens on:
 :42127
 ```
 
-The game server listens on:
+The Blaze Server listens on:
 
 ```text
 :33152
@@ -342,7 +342,7 @@ Frostbite 3/
 │   └── tdf.go
 │
 ├── components/
-│   ├── authentication.go
+│   ├── components.go
 │   └── ...
 │
 ├── network/
@@ -391,7 +391,7 @@ Expected output:
 
 ```text
 Redirector : gosredirector.ea.com:42127
-Game: 151.xxx.xxx.xx:33152
+Blaze: 151.xxx.xxx.xx:33152
 Certificate: network/certificates/gosredirector.pfx 
 Waiting for PS3 connections...
 ```
