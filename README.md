@@ -205,7 +205,7 @@ Protocol:
 TCP
 ```
 
-The game server uses a normal TCP listener.
+The Blaze server uses a normal TCP listener.
 
 Unlike the redirector, the current server listener does not use TLS.
 
