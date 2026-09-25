@@ -192,7 +192,7 @@ Connections are passed into the Blaze packet handler after the TLS layer has bee
 
 ---
 
-## Blaze Game Server
+## Blaze Server
 
 ```text
 IP:
@@ -207,7 +207,7 @@ TCP
 
 The game server uses a normal TCP listener.
 
-Unlike the redirector, the current game server listener does not use TLS.
+Unlike the redirector, the current server listener does not use TLS.
 
 Incoming connections are passed directly to the Blaze packet handler.
 
