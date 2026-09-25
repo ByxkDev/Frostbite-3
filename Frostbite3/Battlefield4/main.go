@@ -12,17 +12,18 @@ import (
 	"strings"
 	"time"
 
+	"bf4/blaze"
 	"bf4/components"
-
+	"bf4/logger"
 )
 
 const (
 	RedirectorHostname  = "gosredirector.ea.com"
 	RedirectorPort      = 42127
-	GameServerHostname  = "151.xxx.xxx.xx"
-	GameServerPort      = 33152
-	CertificatePath     = "network/certificates/gosredirector.pfx"
-	CertificatePassword = "password"
+	BlazeServerHostname = "151.244.72.66"
+	BlazeServerPort     = 33152
+	CertificatePath     = "network/certificates/gosredirector_mod.pfx"
+	CertificatePassword = "123456"
 )
 
 func loadPFX(path, password string) (tls.Certificate, error) {
@@ -62,9 +63,12 @@ func loadPFX(path, password string) (tls.Certificate, error) {
 
 	x509Cert, err := x509.ParseCertificate(certBlock.Bytes)
 	if err == nil {
-		fmt.Printf("[+] Loaded patched PFX certificate\n")
-		fmt.Printf("[+] Subject: %s\n", x509Cert.Subject.String())
-		fmt.Printf("[+] Issuer : %s\n", x509Cert.Issuer.String())
+		logger.Info("[TLS] Loaded patched PFX certificate")
+		logger.Info("[TLS] Subject: %s", x509Cert.Subject.String())
+		logger.Info("[TLS] Issuer: %s", x509Cert.Issuer.String())
+		logger.Info("[TLS] Serial: %s", x509Cert.SerialNumber.String())
+		logger.Info("[TLS] Not Before: %s", x509Cert.NotBefore.Format(time.RFC3339))
+		logger.Info("[TLS] Not After: %s", x509Cert.NotAfter.Format(time.RFC3339))
 	}
 
 	return cert, nil
@@ -138,7 +142,7 @@ func runPowerShell(script, path, password string, privateKey bool) ([]byte, erro
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)),)
+		return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
 	}
 
 	encoded := strings.TrimSpace(string(output))
@@ -178,117 +182,198 @@ func redirectorTLSConfig(cert tls.Certificate) *tls.Config {
 	}
 }
 
+func dumpPacket(direction string, data []byte) {
+	if len(data) < 11 {
+		logger.Warn("[%s] Packet too small for Blaze header: %d bytes", direction, len(data))
+		logger.Hex(logger.LevelTrace, direction+" RAW", data)
+		return
+	}
+
+	packet := blaze.Parse(data)
+
+	logger.Packet(direction, packet.Component, packet.Command, uint8(packet.Type), packet.MessageId, packet.Payload,)
+
+	logger.Trace("%s HEADER: Size=%d Component=%d Command=%d Type=0x%02X MessageId=%d", direction, packet.Size, packet.Component, packet.Command, packet.Type, packet.MessageId,)
+	logger.Trace("%s PAYLOAD LENGTH: %d bytes", direction, len(packet.Payload),)
+	logger.Hex(logger.LevelTrace, direction+" FULL PACKET", data,)
+}
+
 func handleBlaze(conn net.Conn, serverName string) {
 	defer conn.Close()
 
-	fmt.Printf("[%s] Client connected: %s\n", serverName, conn.RemoteAddr())
+	remote := conn.RemoteAddr().String()
+	local := conn.LocalAddr().String()
+
+	logger.Info("[%s] CONNECTION", serverName)
+	logger.Info("[%s] Remote: %s", serverName, remote)
+	logger.Info("[%s] Local: %s", serverName, local)
+	logger.Info("[%s] Type: %T", serverName, conn)
+
+	if tlsConn, ok := conn.(*tls.Conn); ok {
+		logger.Debug("[%s] TLS connection detected", serverName)
+
+		if err := tlsConn.Handshake(); err != nil {
+			logger.Error("[%s] TLS handshake failed: %v", serverName, err)
+			return
+		}
+
+		state := tlsConn.ConnectionState()
+
+		logger.Info("[%s] TLS version: 0x%04X", serverName, state.Version)
+		logger.Info("[%s] TLS cipher: 0x%04X", serverName, state.CipherSuite)
+		logger.Info("[%s] TLS negotiated protocol: %s", serverName, state.NegotiatedProtocol)
+		logger.Info("[%s] TLS server name: %s", serverName, state.ServerName)
+	}
 
 	buf := make([]byte, 65535)
 
 	for {
 		n, err := conn.Read(buf)
+
 		if err != nil {
-			fmt.Printf("[%s] Client disconnected: %v\n", serverName, err)
+			if err == net.ErrClosed {
+				logger.Info("[%s] Connection closed", serverName)
+			} else if err.Error() == "EOF" {
+				logger.Info("[%s] Client disconnected: EOF", serverName)
+			} else {
+				logger.Error("[%s] Read error: %v", serverName, err)
+			}
+
 			return
 		}
 
 		if n == 0 {
+			logger.Debug("[%s] Received zero-byte read", serverName)
 			continue
 		}
 
 		data := append([]byte(nil), buf[:n]...)
 
-		fmt.Printf("[%s] Received %d bytes\n", serverName, len(data))
+		logger.Info("[%s] RECEIVED %d BYTES", serverName, n)
+		logger.Info("[%s] Remote: %s", serverName, remote)
+
+		dumpPacket("IN", data)
 
 		reply := components.HandlePacket(data)
+
 		if reply == nil {
+			logger.Debug("[%s] Handler returned no response", serverName)
 			continue
 		}
 
-		fmt.Printf("[%s] Sending %d bytes\n", serverName, len(reply))
+		logger.Info("[%s] RESPONSE GENERATED: %d bytes", serverName, len(reply))
+		dumpPacket("OUT", reply)
+		logger.Info("[%s] Sending response...", serverName)
 
-		if _, err := conn.Write(reply); err != nil {
-			fmt.Printf("[%s] Send error: %v\n", serverName, err)
-			return
+		written := 0
+
+		for written < len(reply) {
+			count, err := conn.Write(reply[written:])
+			if err != nil {
+				logger.Error("[%s] Send error after %d/%d bytes: %v", serverName, written, len(reply), err,)
+				return
+			}
+
+			if count == 0 {
+				logger.Error("[%s] Write returned 0 bytes", serverName)
+				return
+			}
+
+			written += count
+
+			logger.Debug("[%s] Write progress: %d/%d bytes", serverName, written, len(reply),)
 		}
+
+		logger.Info("[%s] Successfully sent %d bytes", serverName, written)
 	}
 }
 
 func startRedirector() {
-	fmt.Printf("Starting Redirector %s:%d\n", RedirectorHostname, RedirectorPort,)
+	logger.Info("Starting Redirector %s:%d", RedirectorHostname, RedirectorPort,)
 
-	cert, err := loadPFX(CertificatePath,CertificatePassword,)
+	cert, err := loadPFX(CertificatePath, CertificatePassword)
 	if err != nil {
-		panic(fmt.Errorf("failed to load redirector certificate: %w", err,))
+		logger.Error("Failed to load redirector certificate: %v", err)
+		panic(err)
 	}
 
 	tlsConfig := redirectorTLSConfig(cert)
+
 	listener, err := tls.Listen("tcp", fmt.Sprintf(":%d", RedirectorPort), tlsConfig,)
 	if err != nil {
-		panic(fmt.Errorf("failed to start redirector: %w", err,))
+		logger.Error("Failed to start redirector: %v", err)
+		panic(err)
 	}
 
 	defer listener.Close()
+	logger.Info("[REDIRECTOR] TLS listener active on %s:%d", RedirectorHostname, RedirectorPort,)
 
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			fmt.Printf("[REDIRECTOR] Accept error: %v\n", err,)
+			logger.Error("[REDIRECTOR] Accept error: %v", err)
 			continue
 		}
+
+		logger.Info("[REDIRECTOR] TCP connection accepted: %s -> %s", conn.RemoteAddr(), conn.LocalAddr(),)
 
 		go func(conn net.Conn) {
 			defer func() {
 				if r := recover(); r != nil {
-					fmt.Printf("[REDIRECTOR] Panic: %v\n", r,)
+					logger.Error("[REDIRECTOR] Panic: %v", r)
 				}
 			}()
 
 			handleBlaze(conn, "REDIRECTOR")
-
 		} (conn)
 	}
 }
 
-func startGameServer() {
-	fmt.Printf("Starting Game Server %s:%d\n", GameServerHostname, GameServerPort,)
+func startBlazeServer() {
+	logger.Info("Starting Blaze Server %s:%d", BlazeServerHostname, BlazeServerPort,)
 
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", GameServerPort),)
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", BlazeServerPort),)
 	if err != nil {
-		panic(fmt.Errorf("failed to start game server: %w", err,))
+		logger.Error("Failed to start game server: %v", err)
+		panic(err)
 	}
 
 	defer listener.Close()
+	logger.Info("[BLAZE] TCP listener active on %s:%d", BlazeServerHostname, BlazeServerPort,)
 
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			fmt.Printf("[GAME] Accept error: %v\n", err,)
+			logger.Error("[BLAZE] Accept error: %v", err)
 			continue
 		}
+
+		logger.Info("[BLAZE] TCP connection accepted: %s -> %s", conn.RemoteAddr(), conn.LocalAddr(),)
 
 		go func(conn net.Conn) {
 			defer func() {
 				if r := recover(); r != nil {
-					fmt.Printf("[GAME] Panic: %v\n", r,)
+					logger.Error("[BLAZE] Panic: %v", r)
 				}
 			}()
 
-			handleBlaze(conn, "GAME")
-
+			handleBlaze(conn, "BLAZE")
 		} (conn)
 	}
 }
 
 func main() {
-	fmt.Printf("Redirector : %s:%d\n", RedirectorHostname, RedirectorPort,)
-	fmt.Printf("Game: %s:%d\n", GameServerHostname, GameServerPort,)
-	fmt.Printf("Certificate: %s\n", CertificatePath,)
+	logger.Init(true, true)
+	defer logger.Close()
+
+	logger.Info("Redirector : %s:%d", RedirectorHostname, RedirectorPort,)
+	logger.Info("Blaze Server: %s:%d", BlazeServerHostname, BlazeServerPort,)
+	logger.Info("Certificate: %s", CertificatePath)
 
 	go startRedirector()
-	go startGameServer()
+	go startBlazeServer()
 
-	fmt.Println("Waiting for PS3 connections...")
+	logger.Info("Waiting for PS3 connections...")
 
 	for {
 		time.Sleep(time.Hour)
