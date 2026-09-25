@@ -314,7 +314,7 @@ Responsibilities:
 
 ---
 
-## Blaze Game Server
+## Blaze Server
 
 ```text
 151.xxx.xxx.xx:33152
