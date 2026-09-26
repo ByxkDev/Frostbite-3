@@ -334,7 +334,7 @@ func startBlazeServer() {
 
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", BlazeServerPort),)
 	if err != nil {
-		logger.Error("Failed to start game server: %v", err)
+		logger.Error("Failed to start Blaze server: %v", err)
 		panic(err)
 	}
 
