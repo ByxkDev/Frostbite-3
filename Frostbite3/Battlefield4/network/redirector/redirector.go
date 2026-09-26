@@ -14,8 +14,8 @@ const (
 )
 
 const (
-	GameServerIP   = "151.xxx.xxx.xx"
-	GameServerPort = uint32(33152)
+	BlazeServerIP   = "151.xxx.xxx.xx"
+	BlazeServerPort = uint32(33152)
 )
 
 const (
@@ -35,11 +35,11 @@ func BuildGetServerInstanceResponse(messageID uint32, clientType string) []byte 
 	writeTag(payload, "VALU")
 	payload.WriteByte(tdfStruct)
 	// HOST string
-	writeString(payload, "HOST", GameServerIP)
+	writeString(payload, "HOST", BlazeServerIP)
 	// IP int
 	writeInt(payload, "IP  ", blaze.IPToUInt(GameServerIP))
 	// PORT int
-	writeInt(payload, "PORT", GameServerPort)
+	writeInt(payload, "PORT", BlazeServerPort)
 	// End ADDR union
 	payload.WriteByte(0x00)
 	// SECU int
@@ -49,8 +49,8 @@ func BuildGetServerInstanceResponse(messageID uint32, clientType string) []byte 
 
 	fmt.Printf("[REDIRECTOR] Client Type : %q\n", clientType)
 	fmt.Printf("[REDIRECTOR] Message ID  : %d\n", messageID)
-	fmt.Printf("[REDIRECTOR] Server IP   : %s\n", GameServerIP)
-	fmt.Printf("[REDIRECTOR] Server Port : %d\n", GameServerPort)
+	fmt.Printf("[REDIRECTOR] Server IP   : %s\n", BlazeServerIP)
+	fmt.Printf("[REDIRECTOR] Server Port : %d\n", BlazeServerPort)
 	fmt.Printf("[REDIRECTOR] Secure      : false\n")
 	fmt.Printf("[REDIRECTOR] Payload RAW : % X\n", payload.Bytes())
 
