@@ -2,7 +2,7 @@
 
 # BF4 Blaze Emulator
 
-[![Status](https://img.shields.io/badge/status-WIP-orange)](https://github.com/ByxkDev-Frostbite3)
+[![Status](https://img.shields.io/badge/status-WIP-orange)](https://github.com/ByxkDev/Frostbite-3)
 [![Language](https://img.shields.io/badge/language-Go-blue)](https://go.dev/)
 [![Platform](https://img.shields.io/badge/platform-PS3-lightgrey)](https://www.playstation.com/)
 
