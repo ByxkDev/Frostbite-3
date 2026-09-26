@@ -441,10 +441,12 @@ to reproduce the behavior expected by the original client.
 13. Continue protocol reverse engineering.
 14. Expand Blaze component coverage.
 
+
 ---
 
 # Not Yet Implemented
 
+* Complete Logging system
 * Complete `FetchClientConfig` coverage
 * Remaining Util commands
 * Complete authentication flow
