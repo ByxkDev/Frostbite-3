@@ -30,7 +30,7 @@ func BuildPreAuthResponse(messageID uint32) []byte {
 	payload.WriteByte(0x00)
 	payload.WriteByte(0x00)
 
-	blaze.WriteTDF(payload, "INST", "battlefield-4-pc")
+	blaze.WriteTDF(payload, "INST", "battlefield-4-ps3")
 	blaze.WriteBool(payload, "MINR", false)
 	blaze.WriteTDF(payload, "NASP", "cem_ea_id")
 	blaze.WriteTDF(payload, "PLAT", "ps3")
@@ -41,7 +41,7 @@ func BuildPreAuthResponse(messageID uint32) []byte {
 	blaze.WriteTag(payload, "BWPS")
 	payload.WriteByte(blaze.TDF_STRUCT)
 
-	blaze.WriteTDF(payload, "PSA ", "151.244.72.66")
+	blaze.WriteTDF(payload, "PSA ", "151.xxx.xxx.xx")
 
 	blaze.WriteTag(payload, "PSP ")
 	payload.WriteByte(0x00)
