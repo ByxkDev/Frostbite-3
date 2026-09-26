@@ -37,7 +37,7 @@ func BuildGetServerInstanceResponse(messageID uint32, clientType string) []byte 
 	// HOST string
 	writeString(payload, "HOST", BlazeServerIP)
 	// IP int
-	writeInt(payload, "IP  ", blaze.IPToUInt(GameServerIP))
+	writeInt(payload, "IP  ", blaze.IPToUInt(BlazeServerIP))
 	// PORT int
 	writeInt(payload, "PORT", BlazeServerPort)
 	// End ADDR union
