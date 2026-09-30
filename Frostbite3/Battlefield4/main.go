@@ -15,13 +15,14 @@ import (
 	"bf4/blaze"
 	"bf4/components"
 	"bf4/logger"
+	"bf4/network/nucleus"
 )
 
 const (
 	RedirectorHostname  = "gosredirector.ea.com"
 	RedirectorPort      = 42127
-	BlazeServerHostname = "151.xxx.xxx.xx"
-	BlazeServerPort     = 33152
+	GameServerHostname  = "0.0.0.0"
+	GameServerPort      = 33152
 	CertificatePath     = "network/certificates/gosredirector_mod.pfx"
 	CertificatePassword = "password"
 )
@@ -130,7 +131,7 @@ func extractPrivateKeyPowerShell(path, password string) ([]byte, error) {
 	}
 
 	[Convert]::ToBase64String($bytes)
-	`
+    `
 
 	return runPowerShell(script, path, password, true)
 }
@@ -138,7 +139,7 @@ func extractPrivateKeyPowerShell(path, password string) ([]byte, error) {
 func runPowerShell(script, path, password string, privateKey bool) ([]byte, error) {
 	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script,)
 
-	cmd.Env = append(os.Environ(), "BF4_PFX="+path, "BF4_PFX_PASSWORD="+password,)
+	cmd.Env = append(os.Environ(),"BF4_PFX="+path, "BF4_PFX_PASSWORD="+password,)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -183,19 +184,17 @@ func redirectorTLSConfig(cert tls.Certificate) *tls.Config {
 }
 
 func dumpPacket(direction string, data []byte) {
-	if len(data) < 11 {
-		logger.Warn("[%s] Packet too small for Blaze header: %d bytes", direction, len(data))
-		logger.Hex(logger.LevelTrace, direction+" RAW", data)
-		return
-	}
+    if len(data) < 12 {
+        logger.Warn("[%s] Packet too small for Blaze header: %d bytes", direction, len(data))
+        logger.Hex(logger.LevelTrace, direction+" RAW", data)
+        return
+    }
 
-	packet := blaze.Parse(data)
+    packet := blaze.Parse(data)
 
-	logger.Packet(direction, packet.Component, packet.Command, uint8(packet.Type), packet.MessageId, packet.Payload,)
-
-	logger.Trace("%s HEADER: Size=%d Component=%d Command=%d Type=0x%02X MessageId=%d", direction, packet.Size, packet.Component, packet.Command, packet.Type, packet.MessageId,)
-	logger.Trace("%s PAYLOAD LENGTH: %d bytes", direction, len(packet.Payload),)
-	logger.Hex(logger.LevelTrace, direction+" FULL PACKET", data,)
+    logger.Trace("%s HEADER: Size=%d Component=%d Command=%d Type=0x%04X MessageId=%d", direction, packet.Size, packet.Component, packet.Command, packet.Type, packet.MessageId)
+    //logger.Trace("%s PAYLOAD LENGTH: %d bytes", direction, len(packet.Payload))
+    //logger.Hex(logger.LevelTrace, direction+" FULL PACKET", data)
 }
 
 func handleBlaze(conn net.Conn, serverName string) {
@@ -243,7 +242,7 @@ func handleBlaze(conn net.Conn, serverName string) {
 		}
 
 		if n == 0 {
-			logger.Debug("[%s] Received zero-byte read", serverName)
+			//logger.Debug("[%s] Received zero-byte read", serverName)
 			continue
 		}
 
@@ -262,13 +261,16 @@ func handleBlaze(conn net.Conn, serverName string) {
 		}
 
 		logger.Info("[%s] RESPONSE GENERATED: %d bytes", serverName, len(reply))
+
 		dumpPacket("OUT", reply)
+
 		logger.Info("[%s] Sending response...", serverName)
 
 		written := 0
 
 		for written < len(reply) {
 			count, err := conn.Write(reply[written:])
+
 			if err != nil {
 				logger.Error("[%s] Send error after %d/%d bytes: %v", serverName, written, len(reply), err,)
 				return
@@ -289,7 +291,7 @@ func handleBlaze(conn net.Conn, serverName string) {
 }
 
 func startRedirector() {
-	logger.Info("Starting Redirector %s:%d", RedirectorHostname, RedirectorPort,)
+	logger.Info("Starting Redirector %s:%d", RedirectorHostname, RedirectorPort)
 
 	cert, err := loadPFX(CertificatePath, CertificatePassword)
 	if err != nil {
@@ -306,6 +308,7 @@ func startRedirector() {
 	}
 
 	defer listener.Close()
+
 	logger.Info("[REDIRECTOR] TLS listener active on %s:%d", RedirectorHostname, RedirectorPort,)
 
 	for {
@@ -326,38 +329,42 @@ func startRedirector() {
 
 			handleBlaze(conn, "REDIRECTOR")
 		} (conn)
-	}
+	} 
 }
 
-func startBlazeServer() {
-	logger.Info("Starting Blaze Server %s:%d", BlazeServerHostname, BlazeServerPort,)
+func startGameServer() {
+	logger.Info("Starting Game Server %s:%d", GameServerHostname, GameServerPort,)
 
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", BlazeServerPort),)
+	listener, err := net.Listen(
+		"tcp",
+		fmt.Sprintf(":%d", GameServerPort),
+	)
 	if err != nil {
-		logger.Error("Failed to start Blaze server: %v", err)
+		logger.Error("Failed to start game server: %v", err)
 		panic(err)
 	}
 
 	defer listener.Close()
-	logger.Info("[BLAZE] TCP listener active on %s:%d", BlazeServerHostname, BlazeServerPort,)
+
+	logger.Info("[GAME] TCP listener active on %s:%d", GameServerHostname, GameServerPort,)
 
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			logger.Error("[BLAZE] Accept error: %v", err)
+			logger.Error("[GAME] Accept error: %v", err)
 			continue
 		}
 
-		logger.Info("[BLAZE] TCP connection accepted: %s -> %s", conn.RemoteAddr(), conn.LocalAddr(),)
+		logger.Info("[GAME] TCP connection accepted: %s -> %s", conn.RemoteAddr(), conn.LocalAddr(),)
 
 		go func(conn net.Conn) {
 			defer func() {
 				if r := recover(); r != nil {
-					logger.Error("[BLAZE] Panic: %v", r)
+					logger.Error("[GAME] Panic: %v", r)
 				}
 			}()
 
-			handleBlaze(conn, "BLAZE")
+			handleBlaze(conn, "GAME")
 		} (conn)
 	}
 }
@@ -366,12 +373,20 @@ func main() {
 	logger.Init(true, true)
 	defer logger.Close()
 
-	logger.Info("Redirector : %s:%d", RedirectorHostname, RedirectorPort,)
-	logger.Info("Blaze Server: %s:%d", BlazeServerHostname, BlazeServerPort,)
+	logger.Info("Redirector : %s:%d", RedirectorHostname, RedirectorPort)
+	logger.Info("Game       : %s:%d", GameServerHostname, GameServerPort)
 	logger.Info("Certificate: %s", CertificatePath)
 
 	go startRedirector()
-	go startBlazeServer()
+	go startGameServer()
+
+	go func() {
+		nucleusServer := nucleus.New()
+
+		if err := nucleusServer.Start(); err != nil {
+			logger.Error("[NUCLEUS] Server stopped: %v", err)
+		}
+	}()
 
 	logger.Info("Waiting for PS3 connections...")
 
