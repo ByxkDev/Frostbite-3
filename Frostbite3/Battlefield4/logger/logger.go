@@ -22,108 +22,107 @@ var (
 	trace = true
 )
 
-func Init(enableDebug, enableTrace bool) {
+func Init(enableDebug,enableTrace bool){
 	mu.Lock()
-	debug = enableDebug
-	trace = enableTrace
+	debug=enableDebug
+	trace=enableTrace
 	mu.Unlock()
 
 	Info("Logger initialized")
-	Info("Debug logging: %t", enableDebug)
-	Info("Trace logging: %t", enableTrace)
+	Info("Debug logging: %t",enableDebug)
+	Info("Trace logging: %t",enableTrace)
 }
 
-func Close() {}
+func Close(){}
 
-func SetDebug(enabled bool) {
+func SetDebug(enabled bool){
 	mu.Lock()
-	debug = enabled
+	debug=enabled
 	mu.Unlock()
 }
 
-func SetTrace(enabled bool) {
+func SetTrace(enabled bool){
 	mu.Lock()
-	trace = enabled
+	trace=enabled
 	mu.Unlock()
 }
 
-func Debug(format string, args ...any) {
+func Debug(format string,args ...any){
 	mu.Lock()
-	enabled := debug
+	enabled:=debug
 	mu.Unlock()
 
-	if enabled {
-		write(LevelDebug, format, args...)
+	if enabled{
+		write(LevelDebug,format,args...)
 	}
 }
 
-func Info(format string, args ...any) {
-	write(LevelInfo, format, args...)
+func Info(format string,args ...any){
+	write(LevelInfo,format,args...)
 }
 
-func Warn(format string, args ...any) {
-	write(LevelWarn, format, args...)
+func Warn(format string,args ...any){
+	write(LevelWarn,format,args...)
 }
 
-func Error(format string, args ...any) {
-	write(LevelError, format, args...)
+func Error(format string,args ...any){
+	write(LevelError,format,args...)
 }
 
-func Trace(format string, args ...any) {
+func Trace(format string,args ...any){
 	mu.Lock()
-	enabled := trace
+	enabled:=trace
 	mu.Unlock()
 
-	if enabled {
-		write(LevelTrace, format, args...)
+	if enabled{
+		write(LevelTrace,format,args...)
 	}
 }
 
-func Hex(level Level, label string, data []byte) {
-	if level == LevelDebug {
+func Hex(level Level,label string,data []byte){
+	if level==LevelDebug{
 		mu.Lock()
-		enabled := debug
+		enabled:=debug
 		mu.Unlock()
 
-		if !enabled {
+		if !enabled{
 			return
 		}
 	}
 
-	if level == LevelTrace {
+	if level==LevelTrace{
 		mu.Lock()
-		enabled := trace
+		enabled:=trace
 		mu.Unlock()
 
-		if !enabled {
+		if !enabled{
 			return
 		}
 	}
 
-	write(level, "%s (%d bytes): % X", label, len(data), data)
+	write(level,"%s (%d bytes): % X",label,len(data),data)
 }
 
-func Request(data []byte) {
-	Trace("REQUEST (%d bytes)", len(data))
-	Hex(LevelTrace, "REQUEST HEX", data)
+func Request(data []byte){
+	Trace("REQUEST (%d bytes)",len(data))
+	//Hex(LevelTrace,"REQUEST HEX",data)
 }
 
-func Response(data []byte) {
-	Trace("RESPONSE (%d bytes)", len(data))
-	Hex(LevelTrace, "RESPONSE HEX", data)
+func Response(data []byte){
+	Trace("RESPONSE (%d bytes)",len(data))
+	//Hex(LevelTrace,"RESPONSE HEX",data)
 }
 
-func Packet(direction string, component, command uint16, packetType uint8, messageID uint32, payload []byte) {
-	Debug("%s Component=%d Command=%d Type=0x%02X MessageId=%d Payload=%d bytes", direction, component, command, packetType, messageID, len(payload),)
-	Hex(LevelDebug, direction+" PAYLOAD", payload)
+func Packet(direction string,component,command uint16,packetType uint16,messageID uint32,payload []byte){
+	Debug("%s Component=%d Command=%d Type=0x%04X MessageId=%d Payload=%d bytes", direction, component, command, packetType, messageID, len(payload),)
+	//Hex(LevelDebug,direction+" PAYLOAD",payload)
 }
 
-func write(level Level, format string, args ...any) {
-	message := fmt.Sprintf(format, args...)
-	timestamp := time.Now().Format("15:04:05.000")
+func write(level Level,format string,args ...any){
+	message:=fmt.Sprintf(format,args...)
+	timestamp:=time.Now().Format("15:04:05.000")
 
 	mu.Lock()
-	defer mu.Unlock()
-
-	fmt.Printf("[%s] [%s] %s\n", timestamp, level, message)
+	fmt.Printf("[%s] [%s] %s\n",timestamp,level,message)
+	mu.Unlock()
 }
