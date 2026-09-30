@@ -79,7 +79,7 @@ func BuildPreAuthResponse(messageID uint32) []byte {
 	blaze.WriteTag(payload,"BWPS")
 	payload.WriteByte(0x03)
 
-	blaze.WriteTDF(payload,"PSA ","192.168.178.91")
+	blaze.WriteTDF(payload,"PSA ","0.0.0.0")
 
 	blaze.WriteTag(payload,"PSP ")
 	payload.WriteByte(0x00)
