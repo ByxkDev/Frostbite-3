@@ -94,25 +94,34 @@ func WriteTag(buf *bytes.Buffer, tag string) {
 		return
 	}
 
-	var value uint32
+	var output [3]byte
+	raw := []byte(tag)
 
-	value |= uint32((tag[0]-32)&0x3F) << 26
-
-	if len(tag) > 1 {
-		value |= uint32((tag[1]-32)&0x3F) << 20
+	if len(raw) > 0 {
+		output[0] |= (raw[0] & 0x40) << 1
+		output[0] |= (raw[0] & 0x10) << 2
+		output[0] |= (raw[0] & 0x0F) << 2
 	}
 
-	if len(tag) > 2 {
-		value |= uint32((tag[2]-32)&0x3F) << 14
+	if len(raw) > 1 {
+		output[0] |= (raw[1] & 0x40) >> 5
+		output[0] |= (raw[1] & 0x10) >> 4
+		output[1] |= (raw[1] & 0x0F) << 4
 	}
 
-	if len(tag) > 3 {
-		value |= uint32((tag[3]-32)&0x3F) << 8
+	if len(raw) > 2 {
+		output[1] |= (raw[2] & 0x40) >> 3
+		output[1] |= (raw[2] & 0x10) >> 2
+		output[1] |= (raw[2] & 0x0C) >> 2
+		output[2] |= (raw[2] & 0x03) << 6
 	}
 
-	var raw [4]byte
-	binary.BigEndian.PutUint32(raw[:], value)
-	buf.Write(raw[:3])
+	if len(raw) > 3 {
+		output[2] |= (raw[3] & 0x40) >> 1
+		output[2] |= raw[3] & 0x1F
+	}
+
+	buf.Write(output[:])
 }
 
 func ReadTag(data []byte, offset int) (string, int) {
@@ -120,46 +129,49 @@ func ReadTag(data []byte, offset int) (string, int) {
 		return "", -1
 	}
 
-	var raw [4]byte
-	copy(raw[:3], data[offset:offset+3])
+	input := data[offset : offset+3]
 
-	value := binary.BigEndian.Uint32(raw[:])
+	decode := func(m byte, c byte) byte {
+		if m|c == 0x00 {
+			return 0
+		}
 
-	var tag [4]byte
+		if m&0x40 == 0 {
+			return 0x30 | c
+		}
+
+		return m | c
+	}
+
+	var output [4]byte
+
+	output[0] = decode(
+		(input[0]&0x80)>>1,
+		(input[0]&0x7C)>>2,
+	)
+
+	output[1] = decode(
+		(input[0]&0x02)<<5,
+		((input[0]&0x01)<<4)|((input[1]&0xF0)>>4),
+	)
+
+	output[2] = decode(
+		(input[1]&0x08)<<3,
+		((input[1]&0x07)<<2)|((input[2]&0xC0)>>6),
+	)
+
+	output[3] = decode(
+		(input[2]&0x20)<<1,
+		input[2]&0x1F,
+	)
+
 	length := 4
 
-	v0 := byte((value >> 26) & 0x3F)
-	v1 := byte((value >> 20) & 0x3F)
-	v2 := byte((value >> 14) & 0x3F)
-	v3 := byte((value >> 8) & 0x3F)
-
-	if v0 == 0 {
-		return "", offset + 3
+	for length > 0 && output[length-1] == 0 {
+		length--
 	}
 
-	tag[0] = v0 + 32
-
-	if v1 != 0 {
-		tag[1] = v1 + 32
-	} else {
-		length = 1
-		return string(tag[:length]), offset + 3
-	}
-
-	if v2 != 0 {
-		tag[2] = v2 + 32
-	} else {
-		length = 2
-		return string(tag[:length]), offset + 3
-	}
-
-	if v3 != 0 {
-		tag[3] = v3 + 32
-	} else {
-		length = 3
-	}
-
-	return string(tag[:length]), offset + 3
+	return string(output[:length]), offset + 3
 }
 
 func WriteTDF(buf *bytes.Buffer, tag string, value string) {
@@ -931,10 +943,12 @@ func IPToUInt(ip string) uint32 {
 
 func DebugTDF(label string, data []byte) {
 	fields := ReadTDF(data)
+
 	logger.Debug("TDF %s: %d fields", label, len(fields))
 
 	for _, field := range fields {
 		logger.Debug("TAG=%q TYPE=0x%02X (%s)", field.Tag, field.Type, TDFTypeName(field.Type),)
+
 		debugTDFValue("    ", field.Type, field.Value)
 	}
 }
@@ -943,10 +957,13 @@ func debugTDFValue(indent string, t byte, value interface{}) {
 	switch v := value.(type) {
 	case string:
 		logger.Debug("%sVALUE=%q", indent, v)
+
 	case bool:
 		logger.Debug("%sVALUE=%v", indent, v)
+
 	case int64:
 		logger.Debug("%sVALUE=%d (0x%X)", indent, v, uint64(v))
+
 	case []byte:
 		logger.Debug("%sRAW=% X", indent, v)
 
@@ -987,8 +1004,10 @@ func DebugTDFNested(indent string, data []byte) {
 		switch v := field.Value.(type) {
 		case string:
 			logger.Debug("%s    VALUE=%q", indent, v)
+
 		case int64:
 			logger.Debug("%s    VALUE=%d (0x%X)", indent, v, uint64(v),)
+
 		case []byte:
 			logger.Debug("%s    RAW=% X", indent, v)
 
