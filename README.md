@@ -447,10 +447,10 @@ Frostbite 3/
 │       └── gosredirector.pfx
 │
 ├── logger/
-│   └── ...
+│   └── logger.go
 │
-├── xi5/
-│   └── ...
+├── psn/
+│   └── xi5ticket.go
 │
 └── main.go
 ```
