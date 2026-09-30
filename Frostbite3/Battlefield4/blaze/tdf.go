@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"net"
 	"strings"
+
+	"bf4/logger"
 )
 
 const (
@@ -50,6 +53,11 @@ type TDF struct {
 	Value interface{}
 }
 
+type TDFUnion struct {
+	ActiveMember byte
+	Data         []byte
+}
+
 func tdfWireType(t byte) byte {
 	switch t {
 	case TDF_INT8, TDF_INT16, TDF_INT32, TDF_INT64,
@@ -81,25 +89,77 @@ func tdfWireType(t byte) byte {
 
 func WriteTag(buf *bytes.Buffer, tag string) {
 	tag = strings.ToUpper(tag)
+
 	if len(tag) == 0 || len(tag) > 4 {
 		return
 	}
 
-	result := uint32(uint8(tag[0])-32) << 26
+	var value uint32
+
+	value |= uint32((tag[0]-32)&0x3F) << 26
 
 	if len(tag) > 1 {
-		result |= uint32((uint8(tag[1])-32)&0x3F) << 20
-	}
-	if len(tag) > 2 {
-		result |= uint32((uint8(tag[2])-32)&0x3F) << 14
-	}
-	if len(tag) > 3 {
-		result |= uint32((uint8(tag[3])-32)&0x3F) << 8
+		value |= uint32((tag[1]-32)&0x3F) << 20
 	}
 
-	var data [4]byte
-	binary.BigEndian.PutUint32(data[:], result)
-	buf.Write(data[:3])
+	if len(tag) > 2 {
+		value |= uint32((tag[2]-32)&0x3F) << 14
+	}
+
+	if len(tag) > 3 {
+		value |= uint32((tag[3]-32)&0x3F) << 8
+	}
+
+	var raw [4]byte
+	binary.BigEndian.PutUint32(raw[:], value)
+	buf.Write(raw[:3])
+}
+
+func ReadTag(data []byte, offset int) (string, int) {
+	if offset+3 > len(data) {
+		return "", -1
+	}
+
+	var raw [4]byte
+	copy(raw[:3], data[offset:offset+3])
+
+	value := binary.BigEndian.Uint32(raw[:])
+
+	var tag [4]byte
+	length := 4
+
+	v0 := byte((value >> 26) & 0x3F)
+	v1 := byte((value >> 20) & 0x3F)
+	v2 := byte((value >> 14) & 0x3F)
+	v3 := byte((value >> 8) & 0x3F)
+
+	if v0 == 0 {
+		return "", offset + 3
+	}
+
+	tag[0] = v0 + 32
+
+	if v1 != 0 {
+		tag[1] = v1 + 32
+	} else {
+		length = 1
+		return string(tag[:length]), offset + 3
+	}
+
+	if v2 != 0 {
+		tag[2] = v2 + 32
+	} else {
+		length = 2
+		return string(tag[:length]), offset + 3
+	}
+
+	if v3 != 0 {
+		tag[3] = v3 + 32
+	} else {
+		length = 3
+	}
+
+	return string(tag[:length]), offset + 3
 }
 
 func WriteTDF(buf *bytes.Buffer, tag string, value string) {
@@ -110,6 +170,7 @@ func WriteTDF(buf *bytes.Buffer, tag string, value string) {
 
 func WriteTDFStringValue(buf *bytes.Buffer, value string) {
 	data := []byte(value)
+
 	WriteTDFInteger(buf, int64(len(data)+1))
 	buf.Write(data)
 	buf.WriteByte(0)
@@ -121,21 +182,95 @@ func WriteTDFInteger(buf *bytes.Buffer, value int64) {
 		return
 	}
 
-	var cur byte
+	negative := value < 0
 
-	if value >= 0 {
-		cur = byte(value&0x3F) | 0x80
+	var magnitude uint64
+
+	if negative {
+		if value == math.MinInt64 {
+			magnitude = uint64(math.MaxInt64) + 1
+		} else {
+			magnitude = uint64(-value)
+		}
 	} else {
-		value = -value
-		cur = byte(value&0x3F) | 0xC0
+		magnitude = uint64(value)
 	}
 
-	for i := value >> 6; i > 0; i >>= 7 {
-		buf.WriteByte(cur)
-		cur = byte(i&0x7F) | 0x80
+	first := byte(magnitude & 0x3F)
+
+	if negative {
+		first |= 0x40
 	}
 
-	buf.WriteByte(cur & 0x7F)
+	magnitude >>= 6
+
+	if magnitude != 0 {
+		first |= 0x80
+	}
+
+	buf.WriteByte(first)
+
+	for magnitude != 0 {
+		next := byte(magnitude & 0x7F)
+		magnitude >>= 7
+
+		if magnitude != 0 {
+			next |= 0x80
+		}
+
+		buf.WriteByte(next)
+	}
+}
+
+func ReadTDFInteger(data []byte, offset int) (int64, int) {
+	if offset >= len(data) {
+		return 0, -1
+	}
+
+	first := data[offset]
+	offset++
+
+	negative := first&0x40 != 0
+	continuation := first&0x80 != 0
+
+	var value uint64 = uint64(first & 0x3F)
+	shift := uint(6)
+
+	for continuation {
+		if offset >= len(data) {
+			return 0, -1
+		}
+
+		b := data[offset]
+		offset++
+
+		value |= uint64(b&0x7F) << shift
+		shift += 7
+
+		if shift > 63 && b&0x80 != 0 {
+			return 0, -1
+		}
+
+		continuation = b&0x80 != 0
+	}
+
+	if negative {
+		if value == uint64(math.MaxInt64)+1 {
+			return math.MinInt64, offset
+		}
+
+		if value > uint64(math.MaxInt64) {
+			return 0, -1
+		}
+
+		return -int64(value), offset
+	}
+
+	if value > uint64(math.MaxInt64) {
+		return 0, -1
+	}
+
+	return int64(value), offset
 }
 
 func WriteInt8(buf *bytes.Buffer, tag string, value int8) {
@@ -184,19 +319,32 @@ func WriteUInt64(buf *bytes.Buffer, tag string, value uint64) {
 	WriteTag(buf, tag)
 	buf.WriteByte(wireInt)
 
-	if value == 0 {
-		buf.WriteByte(0)
+	if value > math.MaxInt64 {
+		var magnitude uint64 = value
+		first := byte(magnitude & 0x3F)
+		magnitude >>= 6
+
+		if magnitude != 0 {
+			first |= 0x80
+		}
+
+		buf.WriteByte(first)
+
+		for magnitude != 0 {
+			next := byte(magnitude & 0x7F)
+			magnitude >>= 7
+
+			if magnitude != 0 {
+				next |= 0x80
+			}
+
+			buf.WriteByte(next)
+		}
+
 		return
 	}
 
-	cur := byte(value&0x3F) | 0x80
-
-	for i := value >> 6; i > 0; i >>= 7 {
-		buf.WriteByte(cur)
-		cur = byte(i&0x7F) | 0x80
-	}
-
-	buf.WriteByte(cur & 0x7F)
+	WriteTDFInteger(buf, int64(value))
 }
 
 func WriteBool(buf *bytes.Buffer, tag string, value bool) {
@@ -231,7 +379,7 @@ func WriteList(buf *bytes.Buffer, tag string, elementType byte, elements [][]byt
 	WriteTDFInteger(buf, int64(len(elements)))
 
 	for _, element := range elements {
-		buf.Write(element)
+		writeRawTDFValue(buf, tdfWireType(elementType), element)
 	}
 }
 
@@ -254,29 +402,62 @@ func WriteStructList(buf *bytes.Buffer, tag string, elements [][]byte) {
 
 	for _, element := range elements {
 		buf.Write(element)
+		buf.WriteByte(0)
 	}
 }
 
 func WriteMap(buf *bytes.Buffer, tag string, keyType byte, valueType byte, values [][]byte) {
 	WriteTag(buf, tag)
 	buf.WriteByte(wireMap)
-	buf.WriteByte(tdfWireType(keyType))
-	buf.WriteByte(tdfWireType(valueType))
+
+	keyWireType := tdfWireType(keyType)
+	valueWireType := tdfWireType(valueType)
+
+	buf.WriteByte(keyWireType)
+	buf.WriteByte(valueWireType)
 
 	count := len(values) / 2
 	WriteTDFInteger(buf, int64(count))
 
 	for i := 0; i+1 < len(values); i += 2 {
-		key := values[i]
-		value := values[i+1]
+		writeRawTDFValue(buf, keyWireType, values[i])
+		writeRawTDFValue(buf, valueWireType, values[i+1])
+	}
+}
 
-		WriteTDFInteger(buf, int64(len(key)+1))
-		buf.Write(key)
-		buf.WriteByte(0)
+func WriteStringMap(buf *bytes.Buffer, tag string, values map[string]string, order []string) {
+	WriteTag(buf, tag)
+	buf.WriteByte(wireMap)
+	buf.WriteByte(wireString)
+	buf.WriteByte(wireString)
+	WriteTDFInteger(buf, int64(len(order)))
 
-		WriteTDFInteger(buf, int64(len(value)+1))
+	for _, key := range order {
+		value, ok := values[key]
+		if !ok {
+			continue
+		}
+
+		WriteTDFStringValue(buf, key)
+		WriteTDFStringValue(buf, value)
+	}
+}
+
+func writeRawTDFValue(buf *bytes.Buffer, wireType byte, value []byte) {
+	switch wireType {
+	case wireString:
+		WriteTDFStringValue(buf, string(value))
+
+	case wireBlob:
+		WriteTDFInteger(buf, int64(len(value)))
+		buf.Write(value)
+
+	case wireStruct:
 		buf.Write(value)
 		buf.WriteByte(0)
+
+	default:
+		buf.Write(value)
 	}
 }
 
@@ -324,6 +505,7 @@ func EncodeServerInstanceInfo(ip string, port uint32, messages []string, secure 
 	WriteTag(&buf, "ADDR")
 	buf.WriteByte(wireUnion)
 	buf.WriteByte(0x00)
+
 	WriteTag(&buf, "VALU")
 
 	WriteTag(&buf, "HOST")
@@ -361,11 +543,10 @@ func EncodeServerInstanceInfo(ip string, port uint32, messages []string, secure 
 
 	WriteTag(&buf, "SECU")
 	buf.WriteByte(wireInt)
+	WriteTDFInteger(&buf, 0)
 
 	if secure {
-		buf.WriteByte(1)
-	} else {
-		buf.WriteByte(0)
+		buf.Bytes()[buf.Len()-1] = 1
 	}
 
 	WriteTag(&buf, "XDNS")
@@ -379,376 +560,84 @@ func ReadTDF(data []byte) []TDF {
 	var result []TDF
 	offset := 0
 
-	for offset+3 <= len(data) {
+	for offset < len(data) {
+		if data[offset] == 0x00 {
+			offset++
+			continue
+		}
+
 		tag, next := ReadTag(data, offset)
-		if next < 0 {
+		if next < 0 || tag == "" {
 			return result
 		}
+
 		offset = next
 
 		if offset >= len(data) {
 			return result
 		}
 
-		t := data[offset]
+		wireType := data[offset]
 		offset++
 
-		switch t {
-		case wireInt:
-			value, next := ReadTDFInteger(data, offset)
-			if next < 0 {
-				return result
-			}
-			offset = next
-			result = append(result, TDF{
-				Tag:   tag,
-				Type:  wireInt,
-				Value: value,
-			})
-
-		case wireString:
-			value, next := ReadTDFStringValue(data, offset)
-			if next < 0 {
-				return result
-			}
-			offset = next
-			result = append(result, TDF{
-				Tag:   tag,
-				Type:  wireString,
-				Value: value,
-			})
-
-		case wireBlob:
-			length, next := ReadTDFInteger(data, offset)
-			if next < 0 || length < 0 || int64(len(data)-next) < length {
-				return result
-			}
-
-			offset = next
-			value := make([]byte, int(length))
-			copy(value, data[offset:offset+int(length)])
-			offset += int(length)
-
-			result = append(result, TDF{
-				Tag:   tag,
-				Type:  wireBlob,
-				Value: value,
-			})
-
-		case wireStruct:
-			start := offset
-			offset = skipTDFStruct(data, offset)
-			if offset > len(data) {
-				return result
-			}
-
-			value := make([]byte, offset-start)
-			copy(value, data[start:offset])
-
-			result = append(result, TDF{
-				Tag:   tag,
-				Type:  wireStruct,
-				Value: value,
-			})
-
-		case wireList:
-			if offset >= len(data) {
-				return result
-			}
-
-			elementType := data[offset]
-			offset++
-
-			count, next := ReadTDFInteger(data, offset)
-			if next < 0 || count < 0 {
-				return result
-			}
-			offset = next
-
-			elements := make([][]byte, 0, int(count))
-
-			for i := int64(0); i < count; i++ {
-				start := offset
-				offset = skipTDFValue(data, offset, elementType)
-
-				if offset > len(data) {
-					return result
-				}
-
-				element := make([]byte, offset-start)
-				copy(element, data[start:offset])
-				elements = append(elements, element)
-			}
-
-			result = append(result, TDF{
-				Tag:   tag,
-				Type:  wireList,
-				Value: elements,
-			})
-
-		case wireMap:
-			if offset+2 > len(data) {
-				return result
-			}
-
-			keyType := data[offset]
-			valueType := data[offset+1]
-			_ = keyType
-			_ = valueType
-			offset += 2
-
-			count, next := ReadTDFInteger(data, offset)
-			if next < 0 || count < 0 {
-				return result
-			}
-			offset = next
-
-			entries := make([][]byte, 0, int(count)*2)
-
-			for i := int64(0); i < count; i++ {
-				keyLen, next := ReadTDFInteger(data, offset)
-				if next < 0 || keyLen < 0 || int64(len(data)-next) < keyLen {
-					return result
-				}
-				offset = next
-
-				key := make([]byte, int(keyLen))
-				copy(key, data[offset:offset+int(keyLen)])
-				offset += int(keyLen)
-				entries = append(entries, key)
-
-				valueLen, next := ReadTDFInteger(data, offset)
-				if next < 0 || valueLen < 0 || int64(len(data)-next) < valueLen {
-					return result
-				}
-				offset = next
-
-				value := make([]byte, int(valueLen))
-				copy(value, data[offset:offset+int(valueLen)])
-				offset += int(valueLen)
-				entries = append(entries, value)
-			}
-
-			result = append(result, TDF{
-				Tag:   tag,
-				Type:  wireMap,
-				Value: entries,
-			})
-
-		case wireUnion:
-			if offset >= len(data) {
-				return result
-			}
-
-			activeMember := data[offset]
-			offset++
-
-			if activeMember != 0x7F {
-				unionTag, next := ReadTag(data, offset)
-				if next < 0 {
-					return result
-				}
-				offset = next
-
-				if unionTag != "VALU" {
-					return result
-				}
-
-				start := offset
-				offset = skipTDFStruct(data, offset)
-				if offset > len(data) {
-					return result
-				}
-
-				value := make([]byte, offset-start)
-				copy(value, data[start:offset])
-
-				result = append(result, TDF{
-					Tag:  tag,
-					Type: wireUnion,
-					Value: struct {
-						ActiveMember byte
-						Data         []byte
-					}{
-						ActiveMember: activeMember,
-						Data:         value,
-					},
-				})
-			} else {
-				result = append(result, TDF{
-					Tag:   tag,
-					Type:  wireUnion,
-					Value: activeMember,
-				})
-			}
-
-		case wireUnknown, wireVector, wireVector3:
-			fmt.Printf("Unsupported wire TDF type %02X\n", t)
-			return result
-
-		default:
-			fmt.Printf("Unknown TDF wire type %02X\n", t)
+		value, next := readTDFValue(data, offset, wireType)
+		if next < 0 {
 			return result
 		}
+
+		offset = next
+
+		result = append(result, TDF{
+			Tag:   tag,
+			Type:  wireType,
+			Value: value,
+		})
 	}
 
 	return result
 }
 
-func ReadTag(data []byte, offset int) (string, int) {
-	if offset+3 > len(data) {
-		return "", -1
-	}
-
-	var raw [4]byte
-	copy(raw[:3], data[offset:offset+3])
-
-	value := binary.BigEndian.Uint32(raw[:])
-
-	var tag [4]byte
-	length := 4
-
-	v := value & 0x3F00
-	if v != 0 {
-		tag[3] = byte((value>>8)&0x3F) + 32
-	} else {
-		length = 3
-	}
-
-	v = (value >> 14) & 0x3F
-	if v != 0 {
-		tag[2] = byte(v) + 32
-	} else {
-		length = 2
-	}
-
-	v = (value >> 20) & 0x3F
-	if v != 0 {
-		tag[1] = byte(v) + 32
-	} else {
-		length = 1
-	}
-
-	v = value >> 26
-	if v != 0 {
-		tag[0] = byte(v) + 32
-	} else {
-		length = 0
-	}
-
-	return string(tag[:length]), offset + 3
-}
-
-func ReadTDFInteger(data []byte, offset int) (int64, int) {
-	if offset >= len(data) {
-		return 0, -1
-	}
-
-	first := data[offset]
-	offset++
-
-	negative := (first & 0x40) != 0
-	readNext := (first & 0x80) != 0
-
-	var value uint64 = uint64(first & 0x3F)
-	shift := uint(6)
-
-	for readNext {
-		if offset >= len(data) {
-			return 0, -1
-		}
-
-		b := data[offset]
-		offset++
-
-		value |= uint64(b&0x7F) << shift
-		shift += 7
-		readNext = b&0x80 != 0
-	}
-
-	if negative {
-		if value == 0 {
-			return -9223372036854775808, offset
-		}
-		return -int64(value), offset
-	}
-
-	return int64(value), offset
-}
-
-func ReadTDFStringValue(data []byte, offset int) (string, int) {
-	length, next := ReadTDFInteger(data, offset)
-	if next < 0 || length <= 0 || int64(len(data)-next) < length {
-		return "", -1
-	}
-
-	offset = next
-	valueLength := int(length)
-
-	if data[offset+valueLength-1] == 0 {
-		valueLength--
-	}
-
-	value := string(data[offset : offset+valueLength])
-	return value, offset + int(length)
-}
-
-func skipTDFStruct(data []byte, offset int) int {
-	for offset+3 <= len(data) {
-		if data[offset] == 0x00 {
-			return offset + 1
-		}
-
-		_, next := ReadTag(data, offset)
-		if next < 0 || next >= len(data) {
-			return len(data) + 1
-		}
-
-		offset = next
-
-		if offset >= len(data) {
-			return len(data) + 1
-		}
-
-		t := data[offset]
-		offset++
-
-		offset = skipTDFValue(data, offset, t)
-
-		if offset > len(data) {
-			return len(data) + 1
-		}
-	}
-
-	return len(data) + 1
-}
-
-func skipTDFValue(data []byte, offset int, t byte) int {
-	switch t {
+func readTDFValue(data []byte, offset int, wireType byte) (interface{}, int) {
+	switch wireType {
 	case wireInt:
-		_, next := ReadTDFInteger(data, offset)
-		return next
+		value, next := ReadTDFInteger(data, offset)
+		if next < 0 {
+			return nil, -1
+		}
+
+		return value, next
 
 	case wireString:
-		length, next := ReadTDFInteger(data, offset)
-		if next < 0 || length < 0 || int64(len(data)-next) < length {
-			return len(data) + 1
+		value, next := ReadTDFStringValue(data, offset)
+		if next < 0 {
+			return nil, -1
 		}
-		return next + int(length)
+
+		return value, next
 
 	case wireBlob:
 		length, next := ReadTDFInteger(data, offset)
 		if next < 0 || length < 0 || int64(len(data)-next) < length {
-			return len(data) + 1
+			return nil, -1
 		}
-		return next + int(length)
+
+		value := append([]byte(nil), data[next:next+int(length)]...)
+		return value, next + int(length)
 
 	case wireStruct:
-		return skipTDFStruct(data, offset)
+		start := offset
+		next := skipTDFStruct(data, offset)
+
+		if next < 0 || next > len(data) {
+			return nil, -1
+		}
+
+		value := append([]byte(nil), data[start:next-1]...)
+		return value, next
 
 	case wireList:
 		if offset >= len(data) {
-			return len(data) + 1
+			return nil, -1
 		}
 
 		elementType := data[offset]
@@ -756,22 +645,30 @@ func skipTDFValue(data []byte, offset int, t byte) int {
 
 		count, next := ReadTDFInteger(data, offset)
 		if next < 0 || count < 0 {
-			return len(data) + 1
+			return nil, -1
 		}
+
 		offset = next
 
+		elements := make([][]byte, 0, int(count))
+
 		for i := int64(0); i < count; i++ {
-			offset = skipTDFValue(data, offset, elementType)
-			if offset > len(data) {
-				return len(data) + 1
+			start := offset
+
+			next = skipTDFValue(data, offset, elementType)
+			if next < 0 || next > len(data) {
+				return nil, -1
 			}
+
+			elements = append(elements, append([]byte(nil), data[start:next]...))
+			offset = next
 		}
 
-		return offset
+		return elements, offset
 
 	case wireMap:
 		if offset+2 > len(data) {
-			return len(data) + 1
+			return nil, -1
 		}
 
 		keyType := data[offset]
@@ -780,32 +677,219 @@ func skipTDFValue(data []byte, offset int, t byte) int {
 
 		count, next := ReadTDFInteger(data, offset)
 		if next < 0 || count < 0 {
-			return len(data) + 1
+			return nil, -1
 		}
+
+		offset = next
+
+		entries := make([][]byte, 0, int(count)*2)
+
+		for i := int64(0); i < count; i++ {
+			keyStart := offset
+
+			offset = skipTDFValue(data, offset, keyType)
+			if offset < 0 || offset > len(data) {
+				return nil, -1
+			}
+
+			entries = append(entries, append([]byte(nil), data[keyStart:offset]...))
+
+			valueStart := offset
+
+			offset = skipTDFValue(data, offset, valueType)
+			if offset < 0 || offset > len(data) {
+				return nil, -1
+			}
+
+			entries = append(entries, append([]byte(nil), data[valueStart:offset]...))
+		}
+
+		return entries, offset
+
+	case wireUnion:
+		if offset >= len(data) {
+			return nil, -1
+		}
+
+		activeMember := data[offset]
+		offset++
+
+		if activeMember == 0x7F {
+			return TDFUnion{
+				ActiveMember: activeMember,
+				Data:         nil,
+			}, offset
+		}
+
+		unionTag, next := ReadTag(data, offset)
+		if next < 0 || unionTag != "VALU" {
+			return nil, -1
+		}
+
+		offset = next
+
+		start := offset
+		offset = skipTDFStruct(data, offset)
+
+		if offset < 0 || offset > len(data) {
+			return nil, -1
+		}
+
+		return TDFUnion{
+			ActiveMember: activeMember,
+			Data:         append([]byte(nil), data[start:offset-1]...),
+		}, offset
+
+	case wireUnknown, wireVector, wireVector3:
+		return nil, -1
+
+	default:
+		return nil, -1
+	}
+}
+
+func ReadTDFStringValue(data []byte, offset int) (string, int) {
+	length, next := ReadTDFInteger(data, offset)
+
+	if next < 0 || length <= 0 {
+		return "", -1
+	}
+
+	if int64(len(data)-next) < length {
+		return "", -1
+	}
+
+	end := next + int(length)
+
+	valueEnd := end
+
+	if data[end-1] == 0 {
+		valueEnd--
+	}
+
+	return string(data[next:valueEnd]), end
+}
+
+func skipTDFStruct(data []byte, offset int) int {
+	for offset < len(data) {
+		if data[offset] == 0x00 {
+			return offset + 1
+		}
+
+		_, next := ReadTag(data, offset)
+
+		if next < 0 || next >= len(data) {
+			return -1
+		}
+
+		offset = next
+
+		if offset >= len(data) {
+			return -1
+		}
+
+		wireType := data[offset]
+		offset++
+
+		offset = skipTDFValue(data, offset, wireType)
+
+		if offset < 0 || offset > len(data) {
+			return -1
+		}
+	}
+
+	return -1
+}
+
+func skipTDFValue(data []byte, offset int, wireType byte) int {
+	switch wireType {
+	case wireInt:
+		_, next := ReadTDFInteger(data, offset)
+		return next
+
+	case wireString:
+		length, next := ReadTDFInteger(data, offset)
+
+		if next < 0 || length < 0 || int64(len(data)-next) < length {
+			return -1
+		}
+
+		return next + int(length)
+
+	case wireBlob:
+		length, next := ReadTDFInteger(data, offset)
+
+		if next < 0 || length < 0 || int64(len(data)-next) < length {
+			return -1
+		}
+
+		return next + int(length)
+
+	case wireStruct:
+		return skipTDFStruct(data, offset)
+
+	case wireList:
+		if offset >= len(data) {
+			return -1
+		}
+
+		elementType := data[offset]
+		offset++
+
+		count, next := ReadTDFInteger(data, offset)
+
+		if next < 0 || count < 0 {
+			return -1
+		}
+
 		offset = next
 
 		for i := int64(0); i < count; i++ {
-			keyLen, next := ReadTDFInteger(data, offset)
-			if next < 0 || keyLen < 0 || int64(len(data)-next) < keyLen {
-				return len(data) + 1
-			}
-			offset = next + int(keyLen)
+			offset = skipTDFValue(data, offset, elementType)
 
-			valueLen, next := ReadTDFInteger(data, offset)
-			if next < 0 || valueLen < 0 || int64(len(data)-next) < valueLen {
-				return len(data) + 1
+			if offset < 0 {
+				return -1
 			}
-			offset = next + int(valueLen)
+		}
 
-			_ = keyType
-			_ = valueType
+		return offset
+
+	case wireMap:
+		if offset+2 > len(data) {
+			return -1
+		}
+
+		keyType := data[offset]
+		valueType := data[offset+1]
+		offset += 2
+
+		count, next := ReadTDFInteger(data, offset)
+
+		if next < 0 || count < 0 {
+			return -1
+		}
+
+		offset = next
+
+		for i := int64(0); i < count; i++ {
+			offset = skipTDFValue(data, offset, keyType)
+
+			if offset < 0 {
+				return -1
+			}
+
+			offset = skipTDFValue(data, offset, valueType)
+
+			if offset < 0 {
+				return -1
+			}
 		}
 
 		return offset
 
 	case wireUnion:
 		if offset >= len(data) {
-			return len(data) + 1
+			return -1
 		}
 
 		activeMember := data[offset]
@@ -815,26 +899,29 @@ func skipTDFValue(data []byte, offset int, t byte) int {
 			return offset
 		}
 
-		_, next := ReadTag(data, offset)
-		if next < 0 {
-			return len(data) + 1
+		unionTag, next := ReadTag(data, offset)
+
+		if next < 0 || unionTag != "VALU" {
+			return -1
 		}
 
 		offset = next
 		return skipTDFStruct(data, offset)
 
 	default:
-		return len(data) + 1
+		return -1
 	}
 }
 
 func IPToUInt(ip string) uint32 {
 	parsed := net.ParseIP(ip)
+
 	if parsed == nil {
 		return 0
 	}
 
 	ip4 := parsed.To4()
+
 	if ip4 == nil {
 		return 0
 	}
@@ -843,12 +930,11 @@ func IPToUInt(ip string) uint32 {
 }
 
 func DebugTDF(label string, data []byte) {
-	fmt.Printf("Raw (%d bytes): % X\n", len(data), data)
-
 	fields := ReadTDF(data)
+	logger.Debug("TDF %s: %d fields", label, len(fields))
 
-	for i, field := range fields {
-		fmt.Printf("[%02d] TAG=%-4q TYPE=0x%02X (%s)\n", i, field.Tag, field.Type, TDFTypeName(field.Type),)
+	for _, field := range fields {
+		logger.Debug("TAG=%q TYPE=0x%02X (%s)", field.Tag, field.Type, TDFTypeName(field.Type),)
 		debugTDFValue("    ", field.Type, field.Value)
 	}
 }
@@ -856,40 +942,39 @@ func DebugTDF(label string, data []byte) {
 func debugTDFValue(indent string, t byte, value interface{}) {
 	switch v := value.(type) {
 	case string:
-		fmt.Printf("%sVALUE=%q\n", indent, v)
-
+		logger.Debug("%sVALUE=%q", indent, v)
 	case bool:
-		fmt.Printf("%sVALUE=%v\n", indent, v)
-
+		logger.Debug("%sVALUE=%v", indent, v)
 	case int64:
-		fmt.Printf("%sVALUE=%d (0x%X)\n", indent, v, uint64(v))
-
+		logger.Debug("%sVALUE=%d (0x%X)", indent, v, uint64(v))
 	case []byte:
-		fmt.Printf("%sRAW=% X\n", indent, v)
-		if t == wireStruct || t == wireUnion {
+		logger.Debug("%sRAW=% X", indent, v)
+
+		if t == wireStruct {
 			DebugTDFNested(indent+"    ", v)
 		}
 
 	case [][]byte:
-		fmt.Printf("%sCOUNT=%d\n", indent, len(v))
+		logger.Debug("%sCOUNT=%d", indent, len(v))
+
 		for i, element := range v {
-			fmt.Printf("%s[%d] RAW=% X\n", indent, i, element)
+			logger.Debug("%s[%d] RAW=% X", indent, i, element)
+
 			if len(element) > 0 {
 				DebugTDFNested(indent+"    ", element)
 			}
 		}
 
-	case struct {
-		ActiveMember byte
-		Data         []byte
-	}:
-		fmt.Printf("%sACTIVE_MEMBER=0x%02X\n", indent, v.ActiveMember)
-		fmt.Printf("%sDATA=% X\n", indent, v.Data)
-		fmt.Printf("%sDECODED UNION DATA:\n", indent)
-		DebugTDFNested(indent+"    ", v.Data)
+	case TDFUnion:
+		logger.Debug("%sACTIVE_MEMBER=0x%02X", indent, v.ActiveMember,)
+		logger.Debug("%sDATA=% X", indent, v.Data)
+
+		if len(v.Data) > 0 {
+			DebugTDFNested(indent+"    ", v.Data)
+		}
 
 	default:
-		fmt.Printf("%sVALUE=%v\n", indent, value)
+		logger.Debug("%sVALUE=%v", indent, value)
 	}
 }
 
@@ -897,41 +982,37 @@ func DebugTDFNested(indent string, data []byte) {
 	fields := ReadTDF(data)
 
 	for i, field := range fields {
-		fmt.Printf("%s[%02d] TAG=%-4q TYPE=0x%02X (%s)\n", indent, i, field.Tag, field.Type, TDFTypeName(field.Type),)
+		logger.Debug("%s[%02d] TAG=%-4q TYPE=0x%02X (%s)", indent, i, field.Tag, field.Type, TDFTypeName(field.Type),)
 
 		switch v := field.Value.(type) {
 		case string:
-			fmt.Printf("%sVALUE=%q\n", indent, v)
-		case bool:
-			fmt.Printf("%sVALUE=%v\n", indent, v)
+			logger.Debug("%s    VALUE=%q", indent, v)
 		case int64:
-			fmt.Printf("%sVALUE=%d (0x%X)\n", indent, v, uint64(v))
-
+			logger.Debug("%s    VALUE=%d (0x%X)", indent, v, uint64(v),)
 		case []byte:
-			fmt.Printf("%sRAW=% X\n", indent, v)
+			logger.Debug("%s    RAW=% X", indent, v)
+
 			if field.Type == wireStruct {
-				DebugTDFNested(indent+"", v)
+				DebugTDFNested(indent+"    ", v)
 			}
 
 		case [][]byte:
-			fmt.Printf("%sCOUNT=%d\n", indent, len(v))
+			logger.Debug("%s    COUNT=%d", indent, len(v))
+
 			for j, element := range v {
-				fmt.Printf("%s[%d] RAW=% X\n", indent, j, element)
-				if len(element) > 0 {
-					DebugTDFNested(indent+"", element)
-				}
+				logger.Debug("%s    [%d] RAW=% X", indent, j, element,)
 			}
 
-		case struct {
-			ActiveMember byte
-			Data         []byte
-		}:
-			fmt.Printf("%sACTIVE_MEMBER=0x%02X\n", indent, v.ActiveMember)
-			fmt.Printf("%sDATA=% X\n", indent, v.Data)
-			DebugTDFNested(indent+"", v.Data)
+		case TDFUnion:
+			logger.Debug("%s    ACTIVE_MEMBER=0x%02X", indent, v.ActiveMember,)
+			logger.Debug("%s    DATA=% X", indent, v.Data,)
+
+			if len(v.Data) > 0 {
+				DebugTDFNested(indent+"        ", v.Data)
+			}
 
 		default:
-			fmt.Printf("%sVALUE=%v\n", indent, field.Value)
+			logger.Debug("%s    VALUE=%v", indent, field.Value,)
 		}
 	}
 }
@@ -961,4 +1042,8 @@ func TDFTypeName(t byte) string {
 	default:
 		return "UNKNOWN"
 	}
+}
+
+func fmtTDFBytes(data []byte) string {
+	return fmt.Sprintf("% X", data)
 }
