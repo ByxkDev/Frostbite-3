@@ -2,9 +2,9 @@ package components
 
 import (
 	"bytes"
-	"fmt"
 
 	"bf4/blaze"
+	"bf4/logger"
 	"bf4/network/redirector"
 	"bf4/utilities"
 )
@@ -15,121 +15,142 @@ const (
 	Util           uint16 = 9
 )
 
+func componentName(id uint16) string {
+	switch id {
+	case Authentication:
+		return "Authentication"
+	case Redirector:
+		return "Redirector"
+	case Util:
+		return "Util"
+	}
+	return "Unknown"
+}
+
+func logResponse(name string, response []byte) {
+	if len(response) == 0 {
+		logger.Debug("BLAZE: %s produced no response", name)
+		return
+	}
+
+	logger.Debug("BLAZE: %s response: %d bytes", name, len(response))
+}
+
 func HandlePacket(data []byte) []byte {
+	logger.Request(data)
 	packet := blaze.Parse(data)
 
-	fmt.Printf("[BLAZE] Component=%d Command=%d Size=%d Type=0x%04X MessageId=%d\n", packet.Component, packet.Command, len(data), packet.Type, packet.MessageId)
+	logger.Debug("BLAZE: Component=%d (%s) Command=%d Size=%d Type=0x%04X MessageId=%d", packet.Component, componentName(packet.Component), packet.Command, len(data), packet.Type, packet.MessageId,)
+	//logger.Hex(logger.LevelDebug, "RX PAYLOAD", packet.Payload)
+
+	var response []byte
 
 	switch packet.Component {
-	case Redirector:
-		return HandleRedirector(packet)
-
-	case Authentication:
-		return HandleAuthentication(packet)
-
-	case Util:
-		return HandleUtil(packet)
+	case 5:
+		response = HandleRedirector(packet)
+	case 1:
+		response = HandleAuthentication(packet)
+	case 9:
+		response = HandleUtil(packet)
 
 	default:
-		fmt.Printf("[BLAZE] Unknown component: %d command: %d\n", packet.Component, packet.Command)
-		fmt.Printf("[BLAZE] Raw: %x\n", data)
+		logger.Warn("BLAZE: Unknown component: %d command: %d", packet.Component, packet.Command)
+		logger.Hex(logger.LevelWarn, "BLAZE RAW", data)
 		return nil
 	}
+
+	if len(response) > 0 {
+		logger.Response(response)
+	}
+
+	return response
 }
 
 func HandleRedirector(packet blaze.Packet) []byte {
-	fmt.Printf("[BLAZE] Redirector Command=%d\n", packet.Command)
+	logger.Debug("BLAZE: Redirector Command=%d", packet.Command)
 
 	switch packet.Command {
 	case 1:
 		clientType := extractClientType(packet.Payload)
-
-		fmt.Println("[BLAZE] Redirector GetServerInstance")
-		fmt.Printf("[BLAZE] Client Type: %q\n", clientType)
-
+		logger.Info("BLAZE: Redirector GetServerInstance")
+		logger.Debug("BLAZE: Client Type: %q", clientType)
 		response := redirector.BuildGetServerInstanceResponse(packet.MessageId, clientType)
-		fmt.Printf("[BLAZE] Redirector response: %d bytes\n", len(response))
-
+		logResponse("Redirector GetServerInstance", response)
 		return response
 
 	default:
-		fmt.Printf("[BLAZE] Unknown Redirector command: %d\n", packet.Command)
+		logger.Warn("BLAZE: Unknown Redirector command: %d", packet.Command)
 		return nil
 	}
 }
 
 func extractClientType(payload []byte) string {
 	if bytes.Contains(payload, []byte("warsaw client")) {
+		logger.Trace("BLAZE: detected client type \"warsaw client\"")
 		return "warsaw client"
 	}
 
 	if bytes.Contains(payload, []byte("warsaw server")) {
+		logger.Trace("BLAZE: detected client type \"warsaw server\"")
 		return "warsaw server"
 	}
 
+	logger.Debug("BLAZE: client type not recognized in payload (%d bytes)", len(payload))
 	return ""
 }
 
 func HandleAuthentication(packet blaze.Packet) []byte {
-	fmt.Printf("[BLAZE] Authentication Command=%d\n", packet.Command)
+	logger.Debug("BLAZE: Authentication Command=%d", packet.Command)
 
 	switch packet.Command {
 	case 7:
-		fmt.Println("[BLAZE] Authentication PreAuth")
+		logger.Info("BLAZE: Authentication PreAuth")
 		response := utilities.BuildPreAuthResponse(packet.MessageId)
-		fmt.Printf("[BLAZE] Authentication PreAuth response: %d bytes\n", len(response))
+		logResponse("Authentication PreAuth", response)
 		return response
-
 	case 8:
-		fmt.Println("[BLAZE] Authentication PostAuth")
+		logger.Info("BLAZE: Authentication PostAuth")
 		response := utilities.BuildPreAuthResponse(packet.MessageId)
-		fmt.Printf("[BLAZE] Authentication PostAuth response: %d bytes\n", len(response))
+		logResponse("Authentication PostAuth", response)
 		return response
-
 	default:
-		fmt.Printf("[BLAZE] Unknown Authentication command: %d\n", packet.Command)
+		logger.Warn("BLAZE: Unknown Authentication command: %d", packet.Command)
 		return nil
 	}
 }
 
 func HandleUtil(packet blaze.Packet) []byte {
-	fmt.Printf("[BLAZE] Util Command=%d\n", packet.Command)
+	logger.Debug("BLAZE: Util Command=%d", packet.Command)
 
 	switch packet.Command {
 	case 1:
-		fmt.Println("[BLAZE] Util FetchClientConfig")
+		logger.Info("BLAZE: Util FetchClientConfig")
 		response := utilities.BuildFetchClientConfigResponse(packet.MessageId, packet.Payload)
-		fmt.Printf("[BLAZE] Util FetchClientConfig response: %d bytes\n", len(response))
+		logResponse("Util FetchClientConfig", response)
 		return response
-
 	case 2:
-		fmt.Println("[BLAZE] Util Ping")
+		logger.Debug("BLAZE: Util Ping")
 		response := utilities.BuildPingResponse(packet.MessageId)
-		fmt.Printf("[BLAZE] Util Ping response: %d bytes\n", len(response))
+		logResponse("Util Ping", response)
 		return response
-
 	case 5:
-		fmt.Println("[BLAZE] Util TelemetryServer")
+		logger.Info("BLAZE: Util TelemetryServer (no response)")
 		return nil
-
 	case 7:
-		fmt.Println("[BLAZE] Util PreAuth")
+		logger.Info("BLAZE: Util PreAuth")
 		response := utilities.BuildPreAuthResponse(packet.MessageId)
-		fmt.Printf("[BLAZE] Util PreAuth response: %d bytes\n", len(response))
+		logResponse("Util PreAuth", response)
 		return response
-
 	case 8:
-		fmt.Println("[BLAZE] Util PostAuth")
+		logger.Info("BLAZE: Util PostAuth")
 		response := utilities.BuildPreAuthResponse(packet.MessageId)
-		fmt.Printf("[BLAZE] Util PostAuth response: %d bytes\n", len(response))
+		logResponse("Util PostAuth", response)
 		return response
-
 	case 22:
-		fmt.Println("[BLAZE] Util SetClientMetrics")
+		logger.Info("BLAZE: Util SetClientMetrics (no response)")
 		return nil
-
 	default:
-		fmt.Printf("[BLAZE] Unknown Util command: %d\n", packet.Command)
+		logger.Warn("BLAZE: Unknown Util command: %d", packet.Command)
 		return nil
 	}
 }
