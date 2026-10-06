@@ -460,6 +460,25 @@ Battlefield and all related trademarks are the property of their respective owne
 
 ---
 
+# For Electronic Arts / DICE
+
+If you are a representative of **Electronic Arts** or **DICE** and have any concerns about this project, please contact me directly before taking any other action. I am happy to talk and will respond quickly.
+
+* **Email:** dqsbro@gmail.com
+* **Discord:** @Byxk
+
+This project:
+
+* Contains **no EA or DICE code, assets or server software**
+* Does **not** modify or redistribute the game executable
+* Does **not** bypass any purchase or ownership check, so players must own an original copy of Battlefield 4
+* Is **non-commercial** and will never be monetized
+* Exists only to **preserve** the online experience of Battlefield 4 on PlayStation 3 now that the official servers are no longer available on that platform
+
+If you request it, I will cooperate fully, including making changes to the project or taking it down.
+
+---
+
 # Contributing
 
 Contributions are welcome — especially for the **Frostbite game protocol**:
