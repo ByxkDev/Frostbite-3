@@ -4,18 +4,27 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/pem"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"bf4/blaze"
 	"bf4/components"
 	"bf4/logger"
+	"bf4/network/battlelog"
 	"bf4/network/nucleus"
+	"bf4/server"
+	"bf4/server/dedicated"
 )
 
 const (
@@ -24,7 +33,15 @@ const (
 	GameServerHostname  = "0.0.0.0"
 	GameServerPort      = 33152
 	CertificatePath     = "network/certificates/gosredirector_mod.pfx"
-	CertificatePassword = "password"
+	CertificatePassword = "123456"
+
+	QoSPort = 17502
+
+	DedicatedServer     = true
+	DedicatedServerPort = 25210
+
+	BattlelogAPI  = true
+	BattlelogPort = 80
 )
 
 func loadPFX(path, password string) (tls.Certificate, error) {
@@ -76,8 +93,8 @@ func loadPFX(path, password string) (tls.Certificate, error) {
 }
 
 func extractCertificatePowerShell(path, password string) ([]byte, error) {
-	script := 
-	`
+	script :=
+		`
 	$ErrorActionPreference = "Stop"
 
 	$pfx = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2
@@ -99,8 +116,8 @@ func extractCertificatePowerShell(path, password string) ([]byte, error) {
 }
 
 func extractPrivateKeyPowerShell(path, password string) ([]byte, error) {
-	script := 
-	`
+	script :=
+		`
 	$ErrorActionPreference = "Stop"
 
 	$pfx = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2
@@ -137,9 +154,9 @@ func extractPrivateKeyPowerShell(path, password string) ([]byte, error) {
 }
 
 func runPowerShell(script, path, password string, privateKey bool) ([]byte, error) {
-	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script,)
+	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
 
-	cmd.Env = append(os.Environ(),"BF4_PFX="+path, "BF4_PFX_PASSWORD="+password,)
+	cmd.Env = append(os.Environ(), "BF4_PFX="+path, "BF4_PFX_PASSWORD="+password)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -184,17 +201,66 @@ func redirectorTLSConfig(cert tls.Certificate) *tls.Config {
 }
 
 func dumpPacket(direction string, data []byte) {
-    if len(data) < 12 {
-        logger.Warn("[%s] Packet too small for Blaze header: %d bytes", direction, len(data))
-        logger.Hex(logger.LevelTrace, direction+" RAW", data)
-        return
-    }
+	if len(data) < 12 {
+		logger.Warn("[%s] Packet too small for Blaze header: %d bytes", direction, len(data))
+		logger.Hex(logger.LevelTrace, direction+" RAW", data)
+		return
+	}
 
-    packet := blaze.Parse(data)
+	packet := blaze.Parse(data)
 
-    logger.Trace("%s HEADER: Size=%d Component=%d Command=%d Type=0x%04X MessageId=%d", direction, packet.Size, packet.Component, packet.Command, packet.Type, packet.MessageId)
-    //logger.Trace("%s PAYLOAD LENGTH: %d bytes", direction, len(packet.Payload))
-    //logger.Hex(logger.LevelTrace, direction+" FULL PACKET", data)
+	logger.Trace("%s HEADER: Size=%d Component=%d Command=%d Type=0x%04X MessageId=%d", direction, packet.Size, packet.Component, packet.Command, packet.Type, packet.MessageId)
+}
+
+func readBlazePacket(conn net.Conn) ([]byte, error) {
+	const headerSize = 12
+
+	header := make([]byte, headerSize, headerSize+2)
+
+	if _, err := io.ReadFull(conn, header); err != nil {
+		return nil, err
+	}
+
+	payloadSize := int(binary.BigEndian.Uint16(header[0:2]))
+
+	if binary.BigEndian.Uint16(header[8:10])&0x0010 != 0 {
+		ext := make([]byte, 2)
+		if _, err := io.ReadFull(conn, ext); err != nil {
+			return nil, err
+		}
+		payloadSize |= int(binary.BigEndian.Uint16(ext)) << 16
+		header = append(header, ext...)
+	}
+
+	packet := make([]byte, len(header)+payloadSize)
+	copy(packet, header)
+
+	if payloadSize > 0 {
+		if _, err := io.ReadFull(conn, packet[len(header):]); err != nil {
+			return nil, err
+		}
+	}
+
+	return packet, nil
+}
+
+func writeAll(conn net.Conn, mu *sync.Mutex, serverName string, data []byte) error {
+	mu.Lock()
+	defer mu.Unlock()
+
+	written := 0
+	for written < len(data) {
+		count, err := conn.Write(data[written:])
+		if err != nil {
+			return fmt.Errorf("send error after %d/%d bytes: %w", written, len(data), err)
+		}
+		if count <= 0 {
+			return fmt.Errorf("write returned %d bytes", count)
+		}
+		written += count
+		logger.Debug("[%s] Write progress: %d/%d bytes", serverName, written, len(data))
+	}
+	return nil
 }
 
 func handleBlaze(conn net.Conn, serverName string) {
@@ -224,15 +290,23 @@ func handleBlaze(conn net.Conn, serverName string) {
 		logger.Info("[%s] TLS server name: %s", serverName, state.ServerName)
 	}
 
-	buf := make([]byte, 65535)
+	var writeMu sync.Mutex
+
+	var bc *components.Conn
+	if serverName == "GAME" {
+		bc = components.NewConn(remote, func(b []byte) error {
+			dumpPacket("PUSH", b)
+			return writeAll(conn, &writeMu, serverName, b)
+		})
+		defer components.ConnClosed(bc)
+	}
 
 	for {
-		n, err := conn.Read(buf)
-
+		data, err := readBlazePacket(conn)
 		if err != nil {
-			if err == net.ErrClosed {
+			if errors.Is(err, net.ErrClosed) {
 				logger.Info("[%s] Connection closed", serverName)
-			} else if err.Error() == "EOF" {
+			} else if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 				logger.Info("[%s] Client disconnected: EOF", serverName)
 			} else {
 				logger.Error("[%s] Read error: %v", serverName, err)
@@ -241,19 +315,17 @@ func handleBlaze(conn net.Conn, serverName string) {
 			return
 		}
 
-		if n == 0 {
-			//logger.Debug("[%s] Received zero-byte read", serverName)
-			continue
-		}
-
-		data := append([]byte(nil), buf[:n]...)
-
-		logger.Info("[%s] RECEIVED %d BYTES", serverName, n)
+		logger.Info("[%s] RECEIVED %d BYTES", serverName, len(data))
 		logger.Info("[%s] Remote: %s", serverName, remote)
 
 		dumpPacket("IN", data)
 
-		reply := components.HandlePacket(data)
+		var reply []byte
+		if bc != nil {
+			reply = components.HandleConnPacket(bc, data)
+		} else {
+			reply = components.HandlePacket(data)
+		}
 
 		if reply == nil {
 			logger.Debug("[%s] Handler returned no response", serverName)
@@ -261,32 +333,16 @@ func handleBlaze(conn net.Conn, serverName string) {
 		}
 
 		logger.Info("[%s] RESPONSE GENERATED: %d bytes", serverName, len(reply))
-
 		dumpPacket("OUT", reply)
 
 		logger.Info("[%s] Sending response...", serverName)
 
-		written := 0
-
-		for written < len(reply) {
-			count, err := conn.Write(reply[written:])
-
-			if err != nil {
-				logger.Error("[%s] Send error after %d/%d bytes: %v", serverName, written, len(reply), err,)
-				return
-			}
-
-			if count == 0 {
-				logger.Error("[%s] Write returned 0 bytes", serverName)
-				return
-			}
-
-			written += count
-
-			logger.Debug("[%s] Write progress: %d/%d bytes", serverName, written, len(reply),)
+		if err := writeAll(conn, &writeMu, serverName, reply); err != nil {
+			logger.Error("[%s] %v", serverName, err)
+			return
 		}
 
-		logger.Info("[%s] Successfully sent %d bytes", serverName, written)
+		logger.Info("[%s] Successfully sent %d bytes", serverName, len(reply))
 	}
 }
 
@@ -301,7 +357,7 @@ func startRedirector() {
 
 	tlsConfig := redirectorTLSConfig(cert)
 
-	listener, err := tls.Listen("tcp", fmt.Sprintf(":%d", RedirectorPort), tlsConfig,)
+	listener, err := tls.Listen("tcp", fmt.Sprintf(":%d", RedirectorPort), tlsConfig)
 	if err != nil {
 		logger.Error("Failed to start redirector: %v", err)
 		panic(err)
@@ -309,7 +365,7 @@ func startRedirector() {
 
 	defer listener.Close()
 
-	logger.Info("[REDIRECTOR] TLS listener active on %s:%d", RedirectorHostname, RedirectorPort,)
+	logger.Info("[REDIRECTOR] TLS listener active on %s:%d", RedirectorHostname, RedirectorPort)
 
 	for {
 		conn, err := listener.Accept()
@@ -318,7 +374,7 @@ func startRedirector() {
 			continue
 		}
 
-		logger.Info("[REDIRECTOR] TCP connection accepted: %s -> %s", conn.RemoteAddr(), conn.LocalAddr(),)
+		logger.Info("[REDIRECTOR] TCP connection accepted: %s -> %s", conn.RemoteAddr(), conn.LocalAddr())
 
 		go func(conn net.Conn) {
 			defer func() {
@@ -328,12 +384,12 @@ func startRedirector() {
 			}()
 
 			handleBlaze(conn, "REDIRECTOR")
-		} (conn)
-	} 
+		}(conn)
+	}
 }
 
 func startGameServer() {
-	logger.Info("Starting Game Server %s:%d", GameServerHostname, GameServerPort,)
+	logger.Info("Starting Game Server %s:%d", GameServerHostname, GameServerPort)
 
 	listener, err := net.Listen(
 		"tcp",
@@ -346,7 +402,7 @@ func startGameServer() {
 
 	defer listener.Close()
 
-	logger.Info("[GAME] TCP listener active on %s:%d", GameServerHostname, GameServerPort,)
+	logger.Info("[GAME] TCP listener active on %s:%d", GameServerHostname, GameServerPort)
 
 	for {
 		conn, err := listener.Accept()
@@ -355,7 +411,7 @@ func startGameServer() {
 			continue
 		}
 
-		logger.Info("[GAME] TCP connection accepted: %s -> %s", conn.RemoteAddr(), conn.LocalAddr(),)
+		logger.Info("[GAME] TCP connection accepted: %s -> %s", conn.RemoteAddr(), conn.LocalAddr())
 
 		go func(conn net.Conn) {
 			defer func() {
@@ -365,7 +421,7 @@ func startGameServer() {
 			}()
 
 			handleBlaze(conn, "GAME")
-		} (conn)
+		}(conn)
 	}
 }
 
@@ -376,6 +432,14 @@ func main() {
 	logger.Info("Redirector : %s:%d", RedirectorHostname, RedirectorPort)
 	logger.Info("Game       : %s:%d", GameServerHostname, GameServerPort)
 	logger.Info("Certificate: %s", CertificatePath)
+
+	components.ServerHost = GameServerHostname
+
+	components.ListedGames = !DedicatedServer
+	components.PeerHostedMatchmaking = false
+	components.InitGames()
+
+	server.StartHostListeners(server.Games, QoSPort)
 
 	go startRedirector()
 	go startGameServer()
@@ -388,9 +452,36 @@ func main() {
 		}
 	}()
 
+	var ds *dedicated.Server
+	if DedicatedServer {
+		cfg := dedicated.DefaultConfig()
+		cfg.Blaze = fmt.Sprintf("%s:%d", GameServerHostname, GameServerPort)
+		cfg.IP = GameServerHostname
+		cfg.Port = DedicatedServerPort
+
+		time.Sleep(500 * time.Millisecond) 
+		var err error
+		if ds, err = dedicated.Start(cfg); err != nil {
+			logger.Error("Dedicated server not started: %v", err)
+		}
+	}
+
+	if BattlelogAPI {
+		cfg := battlelog.DefaultConfig()
+		cfg.Addr = fmt.Sprintf(":%d", BattlelogPort)
+		cfg.Host = GameServerHostname
+		if _, err := battlelog.Start(cfg); err != nil {
+			logger.Error("Battlelog API not started: %v", err)
+		}
+	}
+
 	logger.Info("Waiting for PS3 connections...")
 
-	for {
-		time.Sleep(time.Hour)
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	<-sig
+	logger.Info("Shutting down...")
+	if ds != nil {
+		ds.Stop()
 	}
 }
