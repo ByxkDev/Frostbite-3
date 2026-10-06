@@ -24,9 +24,9 @@ The original PS3 client now gets **all the way into the game**:
 * ✅ **Test Range is playable**
 * ✅ Server browser, matchmaking and join flow are handled by our GameManager
 * ✅ A headless **dedicated server** logs in to Blaze, registers a game and accepts joining players
-* ⏳ **Real multiplayer matches are not playable yet** — the client reaches the dedicated server's game port, but the in-game Frostbite network protocol (UDP) still has to be reverse engineered and written from scratch
+* ⏳ **Real multiplayer matches are not playable yet** the client reaches the dedicated server's game port, but the in-game Frostbite network protocol (UDP) still has to be reverse engineered and written from scratch
 
-The Blaze side (everything up to "join game") is largely done. The current wall is the **Frostbite game protocol** that EA's own dedicated servers spoke — see [The Frostbite Game Protocol](#the-frostbite-game-protocol--the-24-byte-connection-request).
+The Blaze side (everything up to "join game") is largely done. The current wall is the **Frostbite game protocol** that EA's own dedicated servers spoke see [The Frostbite Game Protocol](#the-frostbite-game-protocol--the-24-byte-connection-request).
 
 ---
 
