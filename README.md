@@ -404,11 +404,11 @@ For the game protocol, the next step is static analysis of the EBOOT's network/c
 | Server browser / game list                    | ✅ Working          |
 | Matchmaking / JoinGame (Blaze side)           | ✅ Working          |
 | Dedicated server (Blaze side)                 | ✅ Working          |
-| Battlelog API                                 | ✅ Working          |
 | Logging                                       | ✅ Working          |
 | Game-port traffic capture                     | ✅ Working          |
 | **Frostbite game protocol (24-byte handshake)** | 🔬 Reverse engineering |
 | Multiplayer matches                           | ⏳ Blocked on game protocol |
+| Battlelog API                                 | ⏳ Future          |
 | Game reporting / end-of-round stats           | ⏳ Future          |
 | Leaderboards                                  | ⏳ Future          |
 | Friends / Presence / Platoons                 | ⏳ Future          |
