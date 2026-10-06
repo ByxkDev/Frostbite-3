@@ -157,7 +157,7 @@ Right now the only engine is the **`CaptureEngine`**: it answers nothing, decode
 * Find the encryption used on the 22-byte payload in the PS3 `EBOOT.ELF`
 * Work out what the server must reply to complete the handshake
 * Reverse engineer the post-handshake packet stream (ghosts / replication, player input, level loading, chat, etc.)
-* Write a real `GameEngine` implementation — effectively a **Frostbite 3 server from scratch**
+* Write a real `GameEngine` implementation effectively a **Frostbite 3 server from scratch**
 
 Help with this part is **very** welcome see [Contributing](#contributing).
 
@@ -244,7 +244,7 @@ RPCN is **not supported yet**; the XI5 parser is the groundwork for it.
 
 `network/battlelog/` serves a small Battlelog-style HTTP API and status page
 
-for now this is not working yet.
+this is not working yet.
 
 ---
 
