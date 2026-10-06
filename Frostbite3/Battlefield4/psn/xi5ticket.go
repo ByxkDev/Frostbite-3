@@ -16,9 +16,6 @@ import (
 	"bf4/logger"
 )
 
-// https://www.psdevwiki.com/ps3/X-I-5-Ticket
-// https://github.com/RipleyTom/rpcn/blob/master/src/server/client/ticket.rs
-
 const (
 	ver20 uint32 = 553648128
 	ver21 uint32 = 553713664
