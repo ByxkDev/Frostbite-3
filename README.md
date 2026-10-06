@@ -523,3 +523,7 @@ No original EA server software is included. Only original source code written fo
 # Current Development Focus
 
 **The Blaze backend is largely done: the unmodified PS3 client logs in, reaches the menus, loads stats and unlocks, and can play the Test Range. Server browsing, matchmaking and joining work, and a headless dedicated server registers games on Blaze. The current focus is reverse engineering Frostbite's in-game UDP protocol, starting with the encrypted 24-byte connection request (counter +3 per retry, flag `0x80`, 22 encrypted bytes) so that real multiplayer matches can be played on a dedicated server written from scratch.**
+
+
+https://github.com/user-attachments/assets/02e658f0-022d-40aa-a046-c770474cb216
+
