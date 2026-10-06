@@ -1,0 +1,13 @@
+[
+  {
+    "name": "[ODT/Syntax] Siege of Shanghai - Team Deathmatch",
+    "level": "levels/mp/mp_siege/mp_siege",
+    "mode": "TeamDeathMatch0",
+    "maxPlayers": 24,
+    "hostIP": "0.0.0.0",
+    "hostPort": 25200,
+    "attributes": {
+      "mod": "DEFAULT"
+    }
+  }
+]
