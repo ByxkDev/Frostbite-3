@@ -1,12 +1,10 @@
 package components
 
 import (
-	"bytes"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
-	"math"
 	"strings"
 	"sync"
 	"time"
@@ -19,39 +17,163 @@ import (
 const (
 	ComponentAuthentication uint16 = 1
 
-	CommandPs3Login    uint16 = 0x0098 
-	CommandSilentLogin uint16 = 0x00C7 
+	CommandPs3Login uint16 = 0x0098
+	CommandSilentLogin uint16 = 0x00C7
 
 	defaultEmail = "email@gmail.com"
 
 	fixedBlazeUserID int64 = 1000000001
 
-	externalRefTypePS3  uint32 = 2 
-	personaStatusActive uint32 = 1 
+	externalRefTypePS3 uint32 = 2
+	personaStatusActive uint32 = 2
+
 )
 
-type personaDetails struct {
-	DisplayName       string
-	ExtID             uint64
-	ExtType           uint32
-	LastAuthenticated uint32
-	PersonaID         int64
-	Status            uint32
-}
-
-type sessionInfo struct {
-	BlazeUserID       int64
-	Email             string
-	IsFirstLogin      bool
-	LastLoginDateTime int64
-	Persona           personaDetails
-	SessionKey        string
-	UserID            int64
+type consoleLoginProbeRequest struct {
+	AUTH string `tdf:"AUTH"`
+	EXTB []byte `tdf:"EXTB"`
+	EXTI uint64 `tdf:"EXTI"`
 }
 
 var (
-	mu        sync.Mutex
-	session   *sessionInfo
+	authFactory = blaze.NewTdfFactory()
+	authEncoder = authFactory.CreateEncoder(false)
+	authDecoder = authFactory.CreateDecoder(false)
+)
+
+type authPersonaWire struct {
+	DSNM string `tdf:"DSNM"`
+	LAST uint32 `tdf:"LAST"`
+	PID int64 `tdf:"PID"`
+	STAS uint32 `tdf:"STAS"`
+	XREF uint64 `tdf:"XREF"`
+	XTYP uint32 `tdf:"XTYP"`
+}
+
+type authSessionWire struct {
+	BUID int64 `tdf:"BUID"`
+	FRST bool `tdf:"FRST"`
+	KEY string `tdf:"KEY"`
+	LLOG int64 `tdf:"LLOG"`
+	MAIL string `tdf:"MAIL"`
+	PDTL authPersonaWire `tdf:"PDTL"`
+	UID int64 `tdf:"UID"`
+}
+
+type consoleLoginResponse struct {
+	AGUP bool `tdf:"AGUP"`
+	LDHT string `tdf:"LDHT"`
+	NTOS bool `tdf:"NTOS"`
+	PCTK string `tdf:"PCTK"`
+	PRIV string `tdf:"PRIV"`
+	SESS authSessionWire `tdf:"SESS"`
+	SPAM bool `tdf:"SPAM"`
+	THST string `tdf:"THST"`
+	TSUI string `tdf:"TSUI"`
+	TURI string `tdf:"TURI"`
+}
+
+type userProfileInfoWire struct {
+	CITY string `tdf:"CITY"`
+	CTRY string `tdf:"CTRY"`
+	GNDR int32 `tdf:"GNDR"`
+	STAT string `tdf:"STAT"`
+	STRT string `tdf:"STRT"`
+	ZIP string `tdf:"ZIP"`
+}
+
+type createAccountParametersWire struct {
+	BDAY int32 `tdf:"BDAY"`
+	BMON int32 `tdf:"BMON"`
+	BYR int32 `tdf:"BYR"`
+	CTRY string `tdf:"CTRY"`
+	DVID uint64 `tdf:"DVID"`
+	GEST bool `tdf:"GEST"`
+	LANG string `tdf:"LANG"`
+	MAIL string `tdf:"MAIL"`
+	OPT1 uint8 `tdf:"OPT1"`
+	OPT3 uint8 `tdf:"OPT3"`
+	PASS string `tdf:"PASS"`
+	PNAM string `tdf:"PNAM"`
+	PRNT string `tdf:"PRNT"`
+	PROF userProfileInfoWire `tdf:"PROF"`
+	TOSV string `tdf:"TOSV"`
+}
+
+type consoleCreateAccountRequest struct {
+	CREQ createAccountParametersWire `tdf:"CREQ"`
+	PERS string `tdf:"PERS"`
+	TICK []byte `tdf:"TICK"`
+	UID int64 `tdf:"UID"`
+	XREF uint64 `tdf:"XREF"`
+}
+
+type fullLoginResponse struct {
+	AGUP bool `tdf:"AGUP"`
+	LDHT string `tdf:"LDHT"`
+	NTOS bool `tdf:"NTOS"`
+	PCTK string `tdf:"PCTK"`
+	PRIV string `tdf:"PRIV"`
+	SESS authSessionWire `tdf:"SESS"`
+	SPAM bool `tdf:"SPAM"`
+	THST string `tdf:"THST"`
+	TSUI string `tdf:"TSUI"`
+	TURI string `tdf:"TURI"`
+}
+
+type consoleCreateAccountResponse struct {
+	RSLT int32 `tdf:"RSLT"`
+	SESS authSessionWire `tdf:"SESS"`
+}
+
+type ps3LoginRequest struct {
+	MAIL string `tdf:"MAIL"`
+	TCKT []byte `tdf:"TCKT"`
+}
+
+type silentLoginRequest struct {
+	AUTH string `tdf:"AUTH"`
+	PID int64 `tdf:"PID"`
+	TYPE int64 `tdf:"TYPE"`
+}
+
+type PersonaDetails struct {
+	DisplayName string
+	ExtId uint64
+	ExtType int32
+	LastAuthenticated uint32
+	PersonaId int64
+	Status int32
+}
+
+type SessionInfo struct {
+	BlazeUserId int64
+	Email string
+	IsFirstLogin bool
+	LastLoginDateTime int64
+	PersonaDetails PersonaDetails
+	SessionKey string
+	UserId int64
+}
+
+type ConsoleCreateAccountResponse struct {
+	CreateResult int32
+	SessionInfo SessionInfo
+}
+
+type sessionInfo struct {
+	BlazeUserId int64
+	Email string
+	IsFirstLogin bool
+	LastLoginDateTime int64
+	PersonaDetails PersonaDetails
+	SessionKey string
+	UserId int64
+}
+
+var (
+	mu sync.Mutex
+	session *sessionInfo
 	psnTicket []byte
 	xi5Ticket *xi5.Ticket
 )
@@ -90,6 +212,7 @@ func SetPsnTicketString(ticket string) {
 	if err != nil {
 		b = []byte(ticket)
 	}
+
 	SetPsnTicket(b)
 }
 
@@ -100,6 +223,7 @@ func GetPsnTicket() []byte {
 	if len(psnTicket) == 0 {
 		return nil
 	}
+
 	cp := make([]byte, len(psnTicket))
 	copy(cp, psnTicket)
 	return cp
@@ -114,285 +238,210 @@ func getXi5Ticket() *xi5.Ticket {
 func newSessionKey() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
-	return hex.EncodeToString(b) 
+	return hex.EncodeToString(b)
 }
 
-func buildSession(t *xi5.Ticket, requestedPersonaID int64, email string, now int64, existing *sessionInfo) (*sessionInfo, error) {
+func buildSession(t *xi5.Ticket,requestedPersonaID int64,email string,now int64,existing *sessionInfo)(*sessionInfo,error) {
 	if t == nil {
-		return nil, errors.New("XI5 ticket is required to build the session")
+		return nil,errors.New("XI5 ticket is required to build the session")
 	}
+
 	if t.UserID == 0 {
-		return nil, errors.New("XI5 ticket contains an invalid UserId")
+		return nil,errors.New("XI5 ticket contains an invalid UserId")
 	}
+
 	if strings.TrimSpace(t.OnlineID) == "" {
-		return nil, errors.New("XI5 ticket contains an empty OnlineId")
+		return nil,errors.New("XI5 ticket contains an empty OnlineId")
 	}
 
 	if strings.TrimSpace(email) == "" && existing != nil {
 		email = existing.Email
 	}
+
 	if strings.TrimSpace(email) == "" {
 		email = defaultEmail
 	}
 
+	maxInt64 := uint64(^uint64(0) >> 1)
+
+	if t.UserID > maxInt64 {
+		return nil,errors.New("XI5 UserId does not fit in int64")
+	}
+
 	var personaID int64
+
 	switch {
 	case requestedPersonaID != 0:
 		personaID = requestedPersonaID
-	case existing != nil && existing.Persona.PersonaID != 0:
-		personaID = existing.Persona.PersonaID
+	case existing != nil && existing.PersonaDetails.PersonaId != 0:
+		personaID = existing.PersonaDetails.PersonaId
 	default:
-		if t.UserID > math.MaxInt64 {
-			return nil, errors.New("XI5 UserId does not fit in int64")
-		}
 		personaID = int64(t.UserID)
 	}
 
-	if now < 0 || now > math.MaxUint32 {
-		return nil, errors.New("timestamp does not fit in uint32")
+	if now < 0 {
+		return nil,errors.New("timestamp cannot be negative")
+	}
+
+	if now > int64(^uint32(0)) {
+		return nil,errors.New("timestamp does not fit in uint32")
 	}
 
 	key := newSessionKey()
+
 	if existing != nil && strings.TrimSpace(existing.SessionKey) != "" {
 		key = existing.SessionKey
 	}
 
+	persona := PersonaDetails{
+		DisplayName: t.OnlineID,
+		ExtId: uint64(t.UserID),
+		ExtType: int32(externalRefTypePS3),
+		LastAuthenticated: uint32(now),
+		PersonaId: personaID,
+		Status: int32(personaStatusActive),
+	}
+
 	return &sessionInfo{
-		BlazeUserID:       fixedBlazeUserID,
-		Email:             email,
-		IsFirstLogin:      false,
+		BlazeUserId: fixedBlazeUserID,
+		Email: email,
+		IsFirstLogin: false,
 		LastLoginDateTime: now,
-		Persona: personaDetails{
-			DisplayName:       t.OnlineID,
-			ExtID:             t.UserID,
-			ExtType:           externalRefTypePS3,
-			LastAuthenticated: uint32(now),
-			PersonaID:         personaID,
-			Status:            personaStatusActive,
-		},
+		PersonaDetails: persona,
 		SessionKey: key,
-		UserID:     fixedBlazeUserID,
-	}, nil
+		UserId: fixedBlazeUserID,
+	},nil
 }
 
-func findField(fields []blaze.TDF, tag string) (blaze.TDF, bool) {
-	tag = strings.TrimSpace(tag)
-	for _, f := range fields {
-		if strings.TrimSpace(f.Tag) == tag {
-			return f, true
-		}
+func sessionToWire(s *sessionInfo) authSessionWire {
+	return authSessionWire{
+		BUID: s.BlazeUserId,
+		FRST: s.IsFirstLogin,
+		KEY: s.SessionKey,
+		LLOG: s.LastLoginDateTime,
+		MAIL: s.Email,
+		PDTL: authPersonaWire{
+			DSNM: s.PersonaDetails.DisplayName,
+			LAST: s.PersonaDetails.LastAuthenticated,
+			PID: s.PersonaDetails.PersonaId,
+			STAS: uint32(s.PersonaDetails.Status),
+			XREF: s.PersonaDetails.ExtId,
+			XTYP: uint32(s.PersonaDetails.ExtType),
+		},
+		UID: s.UserId,
 	}
-	return blaze.TDF{}, false
 }
 
-func fieldInt(fields []blaze.TDF, tag string) int64 {
-	if f, ok := findField(fields, tag); ok {
-		if v, ok := f.Value.(int64); ok {
-			return v
-		}
-	}
-	return 0
+func buildFullLoginPayload(s *sessionInfo)([]byte,error) {
+	return authEncoder.Encode(&fullLoginResponse{
+		AGUP: false,
+		NTOS: false,
+		SESS: sessionToWire(s),
+		SPAM: true,
+	})
 }
 
-func fieldString(fields []blaze.TDF, tag string) string {
-	if f, ok := findField(fields, tag); ok {
-		if v, ok := f.Value.(string); ok {
-			return v
-		}
-	}
-	return ""
-}
-
-func fieldBlob(fields []blaze.TDF, tag string) []byte {
-	if f, ok := findField(fields, tag); ok {
-		if v, ok := f.Value.([]byte); ok {
-			return v
-		}
-	}
-	return nil
-}
-
-func encodeSession(s *sessionInfo) []byte {
-	var pdtl bytes.Buffer
-	blaze.WriteTDF(&pdtl, "DSNM", s.Persona.DisplayName)
-	blaze.WriteUInt32(&pdtl, "LAST", s.Persona.LastAuthenticated)
-	blaze.WriteInt64(&pdtl, "PID", s.Persona.PersonaID)
-	blaze.WriteUInt32(&pdtl, "STAS", s.Persona.Status)
-	blaze.WriteUInt64(&pdtl, "XREF", s.Persona.ExtID)
-	blaze.WriteUInt32(&pdtl, "XTYP", s.Persona.ExtType)
-
-	var sess bytes.Buffer
-	blaze.WriteInt64(&sess, "BUID", s.BlazeUserID)
-	blaze.WriteBool(&sess, "FRST", s.IsFirstLogin)
-	blaze.WriteTDF(&sess, "KEY", s.SessionKey)
-	blaze.WriteInt64(&sess, "LLOG", s.LastLoginDateTime)
-	blaze.WriteTDF(&sess, "MAIL", s.Email)
-	blaze.WriteStruct(&sess, "PDTL", pdtl.Bytes())
-	blaze.WriteInt64(&sess, "UID", s.UserID)
-
-	return sess.Bytes()
-}
-
-func buildConsoleLoginPayload(s *sessionInfo) []byte {
-	var b bytes.Buffer
-	blaze.WriteBool(&b, "AGUP", false) // mCanAgeUp
-	blaze.WriteTDF(&b, "LDHT", "")     // mLegalDocHost
-	blaze.WriteBool(&b, "NTOS", false) // mNeedsLegalDoc
-	blaze.WriteTDF(&b, "PRIV", "")     // mPrivacyPolicyUri
-	blaze.WriteStruct(&b, "SESS", encodeSession(s))
-	blaze.WriteBool(&b, "SPAM", true) // mIsOfLegalContactAge
-	blaze.WriteTDF(&b, "THST", "")    // mTosHost
-	blaze.WriteTDF(&b, "TSUI", "")    // mTosUri
-	blaze.WriteTDF(&b, "TURI", "")    // mTermsOfServiceUri
-	return b.Bytes()
-}
-
-func buildFullLoginPayload(s *sessionInfo) []byte {
-	var b bytes.Buffer
-	blaze.WriteBool(&b, "AGUP", false)
-	blaze.WriteTDF(&b, "LDHT", "")
-	blaze.WriteBool(&b, "NTOS", false)
-	blaze.WriteTDF(&b, "PCTK", "") // mPCLoginToken
-	blaze.WriteTDF(&b, "PRIV", "")
-	blaze.WriteStruct(&b, "SESS", encodeSession(s))
-	blaze.WriteBool(&b, "SPAM", true)
-	blaze.WriteTDF(&b, "THST", "")
-	blaze.WriteTDF(&b, "TSUI", "")
-	blaze.WriteTDF(&b, "TURI", "")
-	return b.Bytes()
-}
-
-func respond(name string, command uint16, messageID uint32, payload []byte) []byte {
-	logger.Hex(logger.LevelDebug, "AUTH "+name+" PAYLOAD", payload)
-	return blaze.EncodePacket(ComponentAuthentication, command, blaze.PacketTypeResponse, messageID, payload)
+func respond(name string,command uint16,messageID uint32,payload []byte)[]byte {
+	logger.Hex(logger.LevelDebug,"AUTH "+name+" PAYLOAD",payload)
+	return blaze.EncodePacket(ComponentAuthentication,command,blaze.PacketTypeResponse,messageID,payload)
 }
 
 func logSession(s *sessionInfo) {
-	logger.Info("AUTH: BUID = %d", s.BlazeUserID)
-	logger.Info("AUTH: UID = %d", s.UserID)
-	logger.Info("AUTH: PID = %d", s.Persona.PersonaID)
-	logger.Info("AUTH: DisplayName = %s", s.Persona.DisplayName)
-	logger.Info("AUTH: ExtId = %d", s.Persona.ExtID)
-	logger.Info("AUTH: MAIL = %s", s.Email)
-	logger.Info("AUTH: SessionKey = %s", s.SessionKey)
+	logger.Info("AUTH: BUID = %d",s.BlazeUserId)
+	logger.Info("AUTH: UID = %d",s.UserId)
+	logger.Info("AUTH: PID = %d",s.PersonaDetails.PersonaId)
+	logger.Info("AUTH: DisplayName = %s",s.PersonaDetails.DisplayName)
+	logger.Info("AUTH: ExtId = %d",s.PersonaDetails.ExtId)
+	logger.Info("AUTH: ExtType = %d",s.PersonaDetails.ExtType)
+	logger.Info("AUTH: Status = %d",s.PersonaDetails.Status)
+	logger.Info("AUTH: MAIL = %s",s.Email)
+	logger.Info("AUTH: SessionKey = %s",s.SessionKey)
 }
 
 func logTicket(t *xi5.Ticket) {
 	logger.Info("AUTH: XI5 Ticket:")
-	logger.Info("AUTH: Version              = %s", t.TicketVersion)
-	logger.Info("AUTH: Serial               = %s", t.Serial)
-	logger.Info("AUTH: IssuerId             = 0x%08X", t.IssuerID)
-	logger.Info("AUTH: UserId               = %d", t.UserID)
-	logger.Info("AUTH: OnlineId             = %s", t.OnlineID)
-	logger.Info("AUTH: Region               = %s", t.Region)
-	logger.Info("AUTH: Domain               = %s", t.Domain)
-	logger.Info("AUTH: ServiceId            = %s", t.ServiceID)
-	logger.Info("AUTH: Status               = %d", t.Status)
-	logger.Info("AUTH: IssuerName           = %s", t.IssuerName)
-	logger.Info("AUTH: Issued               = %s", t.Issued.Format(time.RFC3339))
-	logger.Info("AUTH: Expires              = %s", t.Expires.Format(time.RFC3339))
-	logger.Info("AUTH: SignedByOfficialRPCN = %t", t.SignedByOfficialRPCN())
+	logger.Info("AUTH: Version = %s",t.TicketVersion)
+	logger.Info("AUTH: Serial = %s",t.Serial)
+	logger.Info("AUTH: IssuerId = 0x%08X",t.IssuerID)
+	logger.Info("AUTH: UserId = %d",t.UserID)
+	logger.Info("AUTH: OnlineId = %s",t.OnlineID)
+	logger.Info("AUTH: Region = %s",t.Region)
+	logger.Info("AUTH: Domain = %s",t.Domain)
+	logger.Info("AUTH: ServiceId = %s",t.ServiceID)
+	logger.Info("AUTH: Status = %d",t.Status)
+	logger.Info("AUTH: IssuerName = %s",t.IssuerName)
+	logger.Info("AUTH: Issued = %s",t.Issued.Format(time.RFC3339))
+	logger.Info("AUTH: Expires = %s",t.Expires.Format(time.RFC3339))
+	logger.Info("AUTH: SignedByOfficialRPCN = %t",t.SignedByOfficialRPCN())
 }
 
-func HandlePs3Login(p blaze.Packet) []byte {
-	logger.Info("===== PS3 LOGIN / XI5 =====")
+func HandleSilentLogin(p blaze.Packet)[]byte {
+	var req silentLoginRequest
 
-	req := blaze.ReadTDF(p.Payload)
-
-	ticketBytes := fieldBlob(req, "TCKT")
-	if len(ticketBytes) == 0 {
-		ticketBytes = GetPsnTicket()
-	}
-	if len(ticketBytes) == 0 {
-		logger.Error("AUTH: PS3LoginRequest.TCKT is empty and no stored ticket is available")
-		return nil
+	if err := authDecoder.Decode(p.Payload,&req); err != nil {
+		logger.Warn("AUTH: SilentLogin request decode problem: %v",err)
 	}
 
-	logger.Info("AUTH: XI5 ticket length = %d", len(ticketBytes))
+	auth := req.AUTH
 
-	ticket, err := xi5.NewTicket(ticketBytes)
-	if err != nil {
-		logger.Error("AUTH: failed to parse XI5 ticket: %v", err)
-		return nil
-	}
-
-	logTicket(ticket)
-
-	cp := make([]byte, len(ticketBytes))
-	copy(cp, ticketBytes)
-
-	mu.Lock()
-	psnTicket = cp
-	xi5Ticket = ticket
-	mu.Unlock()
-
-	mail := fieldString(req, "MAIL")
-	if strings.TrimSpace(mail) == "" {
-		mail = defaultEmail
-		logger.Warn("AUTH: PS3LoginRequest.MAIL is empty. Using fallback email: %s", mail)
-	}
-
-	s, err := buildSession(ticket, 0, mail, time.Now().Unix(), nil)
-	if err != nil {
-		logger.Error("AUTH: failed to build session: %v", err)
-		return nil
-	}
-
-	mu.Lock()
-	session = s
-	mu.Unlock()
-
-	logger.Info("===== PS3 LOGIN ACCEPTED =====")
-	logSession(s)
-	logger.Info("===== PS3 LOGIN COMPLETE =====")
-
-	return respond("Ps3Login", p.Command, p.MessageId, buildConsoleLoginPayload(s))
-}
-
-func HandleSilentLogin(p blaze.Packet) []byte {
-	logger.Info("===== SILENT LOGIN 0x00C7 =====")
-
-	req := blaze.ReadTDF(p.Payload)
-
-	auth := fieldString(req, "AUTH")
 	if strings.TrimSpace(auth) == "" {
 		auth = "<empty>"
 	}
-	requestedPID := fieldInt(req, "PID")
 
-	logger.Info("AUTH: AUTH = %s", auth)
-	logger.Info("AUTH: PID = %d", requestedPID)
-	logger.Info("AUTH: TYPE = %d", fieldInt(req, "TYPE"))
+	requestedPID := req.PID
+
+	logger.Info("AUTH: AUTH = %s",auth)
+	logger.Info("AUTH: PID = %d",requestedPID)
+	logger.Info("AUTH: TYPE = %d",req.TYPE)
 
 	ticket := getXi5Ticket()
+
 	if ticket == nil {
 		logger.Error("AUTH: no stored XI5 ticket available during SilentLogin")
 		return nil
 	}
 
 	var existing *sessionInfo
+
 	mu.Lock()
+
 	if session != nil {
 		c := *session
 		existing = &c
 	}
+
 	mu.Unlock()
 
 	logger.Info("AUTH: SilentLogin using stored XI5 identity: UserId=%d OnlineId=%q",
-		ticket.UserID, ticket.OnlineID)
+		ticket.UserID,
+		ticket.OnlineID)
 
 	if requestedPID == 0 && existing != nil {
-		requestedPID = existing.Persona.PersonaID
+		requestedPID = existing.PersonaDetails.PersonaId
 	}
 
 	email := defaultEmail
+
 	if existing != nil {
 		email = existing.Email
 	}
 
-	s, err := buildSession(ticket, requestedPID, email, time.Now().Unix(), existing)
+	s,err := buildSession(
+		ticket,
+		requestedPID,
+		email,
+		time.Now().Unix(),
+		existing,
+	)
+
 	if err != nil {
-		logger.Error("AUTH: failed to build session: %v", err)
+		logger.Error("AUTH: failed to build session: %v",err)
+		return nil
+	}
+
+	payload,err := buildFullLoginPayload(s)
+	if err != nil {
+		logger.Error("AUTH: failed to encode SilentLogin response: %v",err)
 		return nil
 	}
 
@@ -400,10 +449,8 @@ func HandleSilentLogin(p blaze.Packet) []byte {
 	session = s
 	mu.Unlock()
 
-	logger.Info("===== SILENT LOGIN ACCEPTED =====")
 	logSession(s)
 	logger.Info("AUTH: SilentLogin response prepared: AGUP=false SPAM=true NTOS=false")
-	logger.Info("===== SILENT LOGIN COMPLETE =====")
 
-	return respond("SilentLogin", p.Command, p.MessageId, buildFullLoginPayload(s))
+	return respond("SilentLogin",p.Command,p.MessageId,payload)
 }
