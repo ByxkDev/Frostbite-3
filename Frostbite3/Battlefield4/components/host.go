@@ -283,7 +283,7 @@ func hostAuth(c *Conn, h *hostSession, p blaze.Packet) []byte {
 			h.mu.Unlock()
 		}
 		logger.Info("HOST %d: LoginPersona %q", c.ID, req.PNAM)
-		return append(gmReply(p, ptr(hostSession2Info(h, platformsPS3)), "Host LoginPersona"), hostUserNotifies(h)...)
+		return append(gmReply(p, ptr(hostSession2Info(h, platformPS3)), "Host LoginPersona"), hostUserNotifies(h)...)
 
 	case 0x001D:
 		return handleAuthListUserEntitlements2(p)
