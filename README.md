@@ -159,7 +159,7 @@ Right now the only engine is the **`CaptureEngine`**: it answers nothing, decode
 * Reverse engineer the post-handshake packet stream (ghosts / replication, player input, level loading, chat, etc.)
 * Write a real `GameEngine` implementation — effectively a **Frostbite 3 server from scratch**
 
-Help with this part is **very** welcome — see [Contributing](#contributing).
+Help with this part is **very** welcome see [Contributing](#contributing).
 
 ---
 
