@@ -412,9 +412,7 @@ func HandleSilentLogin(p blaze.Packet)[]byte {
 
 	mu.Unlock()
 
-	logger.Info("AUTH: SilentLogin using stored XI5 identity: UserId=%d OnlineId=%q",
-		ticket.UserID,
-		ticket.OnlineID)
+	logger.Info("AUTH: SilentLogin using stored XI5 identity: UserId=%d OnlineId=%q", ticket.UserID, ticket.OnlineID)
 
 	if requestedPID == 0 && existing != nil {
 		requestedPID = existing.PersonaDetails.PersonaId
@@ -426,13 +424,7 @@ func HandleSilentLogin(p blaze.Packet)[]byte {
 		email = existing.Email
 	}
 
-	s,err := buildSession(
-		ticket,
-		requestedPID,
-		email,
-		time.Now().Unix(),
-		existing,
-	)
+	s,err := buildSession(ticket, requestedPID, email, time.Now().Unix(), existing,)
 
 	if err != nil {
 		logger.Error("AUTH: failed to build session: %v",err)
