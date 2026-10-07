@@ -124,6 +124,50 @@ const (
 	userAttributes   = 20409902694400
 )
 
+type setClientMetricsRequest struct {
+	UBPS uint64 `tdf:"UBPS"`
+	NAME string `tdf:"NAME"`
+	NATT uint64 `tdf:"NATT"`
+	DBPS uint64 `tdf:"DBPS"`
+}
+
+func natTypeName(n uint64) string {
+	switch n {
+	case 0:
+		return "OPEN"
+	case 1:
+		return "MODERATE"
+	case 2:
+		return "STRICT"
+	case 3:
+		return "UNKNOWN/strict"
+	default:
+		return "?"
+	}
+}
+
+func handleUtilSetClientMetrics(p blaze.Packet) []byte {
+	logger.Info("UTIL: SetClientMetrics (no response)")
+
+	var req setClientMetricsRequest
+	if err := component35TdfDecoder.Decode(p.Payload, &req); err != nil {
+		logger.Debug("UTIL: SetClientMetrics decode skipped: %v", err)
+		return nil
+	}
+
+	if req.NAME != "" {
+		logger.Info("UTIL: SetClientMetrics gateway=%q", req.NAME)
+	}
+	logger.Info("UTIL: SetClientMetrics NAT=%d (%s) up=%d bps down=%d bps",
+		req.NATT, natTypeName(req.NATT), req.UBPS, req.DBPS)
+
+	if req.NATT >= 2 {
+		logger.Warn("UTIL: SetClientMetrics reports a STRICT NAT -- peer connections to this client may fail")
+	}
+
+	return nil
+}
+
 var (
 	component35TdfFactory = blaze.NewTdfFactory()
 	component35TdfEncoder = component35TdfFactory.CreateEncoder(false)
@@ -609,6 +653,11 @@ func HandleAuthentication(packet blaze.Packet) []byte {
 		return handleAuthGetAuthToken(packet)
 	case 39:
 		return handleAuthGrantEntitlement2(packet)
+	case 199:
+		logger.Info("BLAZE: Authentication TicketLogin (0xC7)")
+		response := HandleTicketLogin(packet)
+		logResponse("Authentication TicketLogin", response)
+		return response
 	default:
 		logger.Warn("BLAZE: Unknown Authentication command: %d", packet.Command)
 		logger.Hex(logger.LevelWarn, "AUTH RAW", packet.Payload)
@@ -647,11 +696,10 @@ func HandleUtil(packet blaze.Packet) []byte {
 		return handleUtilUserSettingsSave(packet)
 	case 12:
 		return handleUtilUserSettingsLoadAll(packet)
-	case 22:
-		logger.Info("BLAZE: Util SetClientMetrics (no response)")
-		return nil
 	case 28:
 		return handleUtilSetUserMode(packet)
+	case 22:
+		return handleUtilSetClientMetrics(packet)
 	default:
 		logger.Warn("BLAZE: Unknown Util command: %d", packet.Command)
 		logger.Hex(logger.LevelWarn, "UTIL RAW", packet.Payload)
