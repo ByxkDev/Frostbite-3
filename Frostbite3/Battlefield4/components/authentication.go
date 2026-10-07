@@ -454,3 +454,30 @@ func HandleSilentLogin(p blaze.Packet)[]byte {
 
 	return respond("SilentLogin",p.Command,p.MessageId,payload)
 }
+
+type ticketLoginRequest struct {
+	TCKT []byte `tdf:"TCKT"`
+}
+
+func HandleTicketLogin(p blaze.Packet) []byte {
+	var req ticketLoginRequest
+
+	if err := authDecoder.Decode(p.Payload, &req); err != nil {
+		logger.Warn("AUTH: 0xC7 request decode problem: %v", err)
+	}
+
+	logger.Info("AUTH: 0xC7 ticket login, TCKT length=%d", len(req.TCKT))
+
+	if len(req.TCKT) > 0 {
+		SetPsnTicket(req.TCKT)
+	} else if getXi5Ticket() == nil {
+		logger.Error("AUTH: 0xC7 has no TCKT and no stored XI5 ticket")
+		return nil
+	}
+
+	if t := getXi5Ticket(); t != nil {
+		logTicket(t)
+	}
+
+	return HandleSilentLogin(p)
+}
