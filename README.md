@@ -506,6 +506,7 @@ Reach out on Discord: **@Byxk**
 * https://github.com/buchacho/BF4BlazeEmulator
 * https://github.com/PocketRelay/Server
 * https://github.com/RPCS3/rpcs3
+* https://github.com/heavywguy
 
 thank you for your work and help!
 
