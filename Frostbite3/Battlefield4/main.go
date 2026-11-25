@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -21,7 +22,7 @@ import (
 	"bf4/blaze"
 	"bf4/components"
 	"bf4/logger"
-	"bf4/network/battlelog"
+	"bf4/network/dns"
 	"bf4/network/nucleus"
 	"bf4/server"
 	"bf4/server/dedicated"
@@ -30,18 +31,20 @@ import (
 const (
 	RedirectorHostname  = "gosredirector.ea.com"
 	RedirectorPort      = 42127
-	GameServerHostname  = "0.0.0.0"
+	GameServerHostname  = ""
 	GameServerPort      = 33152
 	CertificatePath     = "network/certificates/gosredirector_mod.pfx"
-	CertificatePassword = "123456"
+	CertificatePassword = ""
 
 	QoSPort = 17502
 
 	DedicatedServer     = true
 	DedicatedServerPort = 25210
 
-	BattlelogAPI  = true
-	BattlelogPort = 80
+	SplitDNS         = true
+	SplitDNSConfig   = "dns.conf"
+	SplitDNSUpstream = "1.1.1.1:53"
+	SplitDNSBlock    = splitdns.BlockStrict
 )
 
 func loadPFX(path, password string) (tls.Certificate, error) {
@@ -425,7 +428,82 @@ func startGameServer() {
 	}
 }
 
+func startTerminalLog(dir string) (func(), error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(dir, "bf4_"+time.Now().Format("20060102_150405")+".log")
+	file, err := os.Create(path)
+	if err != nil {
+		return nil, err
+	}
+
+	origOut, origErr := os.Stdout, os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+	os.Stdout, os.Stderr = w, w
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = io.Copy(io.MultiWriter(origOut, &ansiStripper{w: file}), r)
+	}()
+
+	fmt.Fprintf(origOut, "Saving terminal output to %s\n", path)
+
+	return func() {
+		os.Stdout, os.Stderr = origOut, origErr
+		w.Close()
+		<-done
+		r.Close()
+		file.Sync()
+		file.Close()
+	}, nil
+}
+
+type ansiStripper struct {
+	w     io.Writer
+	state int
+}
+
+func (a *ansiStripper) Write(p []byte) (int, error) {
+	out := make([]byte, 0, len(p))
+	for _, c := range p {
+		switch a.state {
+		case 0:
+			if c == 0x1b {
+				a.state = 1
+				continue
+			}
+			out = append(out, c)
+		case 1:
+			if c == '[' {
+				a.state = 2
+			} else {
+				a.state = 0
+			}
+		case 2:
+			if c >= 0x40 && c <= 0x7e {
+				a.state = 0
+			}
+		}
+	}
+	if _, err := a.w.Write(out); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
 func main() {
+	if stopLog, err := startTerminalLog("logs"); err != nil {
+		fmt.Fprintf(os.Stderr, "terminal log disabled: %v\n", err)
+	} else {
+		defer stopLog()
+	}
+
 	logger.Init(true, true)
 	defer logger.Close()
 
@@ -444,8 +522,11 @@ func main() {
 	go startRedirector()
 	go startGameServer()
 
+	store := components.NewStore(nil, nil, components.DefaultCatalog())
+
 	go func() {
 		nucleusServer := nucleus.New()
+		nucleusServer.Mount(store.Wrap)
 
 		if err := nucleusServer.Start(); err != nil {
 			logger.Error("[NUCLEUS] Server stopped: %v", err)
@@ -455,23 +536,15 @@ func main() {
 	var ds *dedicated.Server
 	if DedicatedServer {
 		cfg := dedicated.DefaultConfig()
-		cfg.Blaze = fmt.Sprintf("%s:%d", GameServerHostname, GameServerPort)
+		cfg.Blaze = fmt.Sprintf("127.0.0.1:%d", GameServerPort)
 		cfg.IP = GameServerHostname
 		cfg.Port = DedicatedServerPort
+		cfg.Engine = dedicated.NewHandshakeEngine("captures")
 
-		time.Sleep(500 * time.Millisecond) 
+		time.Sleep(500 * time.Millisecond)
 		var err error
 		if ds, err = dedicated.Start(cfg); err != nil {
 			logger.Error("Dedicated server not started: %v", err)
-		}
-	}
-
-	if BattlelogAPI {
-		cfg := battlelog.DefaultConfig()
-		cfg.Addr = fmt.Sprintf(":%d", BattlelogPort)
-		cfg.Host = GameServerHostname
-		if _, err := battlelog.Start(cfg); err != nil {
-			logger.Error("Battlelog API not started: %v", err)
 		}
 	}
 
