@@ -394,10 +394,7 @@ func startRedirector() {
 func startGameServer() {
 	logger.Info("Starting Game Server %s:%d", GameServerHostname, GameServerPort)
 
-	listener, err := net.Listen(
-		"tcp",
-		fmt.Sprintf(":%d", GameServerPort),
-	)
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", GameServerPort),)
 	if err != nil {
 		logger.Error("Failed to start game server: %v", err)
 		panic(err)
