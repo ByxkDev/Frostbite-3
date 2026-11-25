@@ -37,7 +37,7 @@ var (
 var (
 	CoopMission    = server.SiegeLevel
 	CoopDifficulty = "Normal"
-	CoopGameType   = "frostbite_multiplayer" 
+	CoopGameType   = "frostbite_multiplayer"
 )
 
 type peerProfile struct {
@@ -55,9 +55,9 @@ func currentPeerProfile(hostName string) peerProfile {
 				Level:      CoopMission,
 				Mode:       "Cooperative",
 				MaxPlayers: 2,
-				Settings: gsOpenToBrowsing | gsOpenToMatchmaking | gsOpenToInvites | gsOpenToJoinByPlayer | gsJoinInProgress,
-				GameType: CoopGameType,
-				VOIP:     voipPeerToPeer,
+				Settings:   gsOpenToBrowsing | gsOpenToMatchmaking | gsOpenToInvites | gsOpenToJoinByPlayer | gsJoinInProgress,
+				GameType:   CoopGameType,
+				VOIP:       voipPeerToPeer,
 				Attributes: map[string]string{
 					"mission":    CoopMission,
 					"difficulty": CoopDifficulty,
