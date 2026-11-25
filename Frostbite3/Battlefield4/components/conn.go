@@ -13,8 +13,8 @@ import (
 
 type Conn struct {
 	ID     uint64
-	Remote string               
-	Push   func(b []byte) error 
+	Remote string
+	Push   func(b []byte) error
 
 	mu        sync.Mutex
 	host      *hostSession
