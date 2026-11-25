@@ -18,7 +18,7 @@ const (
 	UserSessions     uint16 = 0x7802
 )
 
-var ServerHost = ""
+var ServerHost = "151.244.72.66"
 
 const tickerPort = 17502
 
