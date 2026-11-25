@@ -2,11 +2,14 @@ package components
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"bf4/blaze"
 	"bf4/logger"
@@ -14,8 +17,7 @@ import (
 
 const (
 	Stats         uint16 = 0x0007
-	Component0801 uint16 = 0x0801 
-	Packs         uint16 = 0x0802
+	Component0801 uint16 = 0x0801
 	Inventory     uint16 = 0x0803
 )
 
@@ -25,8 +27,9 @@ var ItemsFile = "data/items.txt"
 func HandleComponent0801(p blaze.Packet) []byte {
 	switch p.Command {
 	case 0x0032:
-		logger.Info("0801: command 0x32 -> empty 0x3000 reply")
-		return encodeBlazePacket(p.Component, p.Command, 0, 0x3000, uint32(p.MessageId), nil)
+		return handleRspGetConfig(p)
+	case 0x0014:
+		return handleComponent0801Cmd20(p)
 	default:
 		logger.Warn("0801: unknown command %d", p.Command)
 		logger.Hex(logger.LevelWarn, "0801 RAW", p.Payload)
@@ -186,8 +189,17 @@ func handleUtilUserSettingsLoadAll(p blaze.Packet) []byte {
 	return encodeReply(p, &userSettingsLoadAllResponse{SMAP: m}, "Util UserSettingsLoadAll")
 }
 
+type setUserModeRequest struct {
+	MODE uint64 `tdf:"MODE"`
+	STAT uint64 `tdf:"STAT"`
+}
+
 func handleUtilSetUserMode(p blaze.Packet) []byte {
-	logger.Info("UTIL: SetUserMode -> empty reply")
+	var req setUserModeRequest
+	if err := component35TdfDecoder.Decode(p.Payload, &req); err != nil {
+		logger.Warn("UTIL: SetUserMode decode failed: %v", err)
+	}
+	logger.Info("UTIL: SetUserMode MODE=%d STAT=%d -> empty reply", req.MODE, req.STAT)
 	return encodeBlazePacket(p.Component, p.Command, 0, blazeTypeReply, uint32(p.MessageId), nil)
 }
 
@@ -418,7 +430,7 @@ func handleInventoryGetItems(p blaze.Packet) []byte {
 
 	var resp getItemsResponse
 	if req.CFLG == 2 {
-		resp.INVT.CLST = []consumable{}
+		resp.INVT.CLST = userConsumables()
 	} else {
 		resp.INVT.ULST = append([]string{}, loadItems()...)
 	}
@@ -431,6 +443,10 @@ func HandleInventory(p blaze.Packet) []byte {
 	switch p.Command {
 	case 0x0001:
 		return handleInventoryGetItems(p)
+	case 0x0003:
+		return handleInventoryUseConsumable(p)
+	case 0x0006:
+		return handleInventoryGetTemplate(p)
 	default:
 		logger.Warn("INVENTORY: unknown command %d (0x%04X)", p.Command, p.Command)
 		logger.Hex(logger.LevelWarn, "INVENTORY RAW", p.Payload)
@@ -438,14 +454,178 @@ func HandleInventory(p blaze.Packet) []byte {
 	}
 }
 
-func HandlePacks(p blaze.Packet) []byte {
-	switch p.Command {
-	case 0x0001, 0x0005:
-		logger.Info("PACKS: command %d -> empty reply (no packs)", p.Command)
-		return encodeBlazePacket(p.Component, p.Command, 0, blazeTypeReply, uint32(p.MessageId), nil)
-	default:
-		logger.Warn("PACKS: unknown command %d (0x%04X)", p.Command, p.Command)
-		logger.Hex(logger.LevelWarn, "PACKS RAW", p.Payload)
-		return nil
+var (
+	ConsumablesFile     = "data/consumables.txt"
+	DefaultConsumables  = map[string]uint64{"ulte_boost_25": 99, "ulte_boost_50": 99, "ulte_boost_100": 99, "ulte_boost_200": 99}
+	ConsumableDuration  = uint64(3600)
+	consumablesMu       sync.Mutex
+	consumableOrderOnce sync.Once
+	consumableOrder     []string
+	consumableGrants    map[string]uint64
+)
+
+type ownedConsumable struct {
+	Key       string `json:"key"`
+	Qty       uint64 `json:"qty"`
+	Activated int64  `json:"activated,omitempty"`
+}
+
+func consumableDefaults() ([]string, map[string]uint64) {
+	consumableOrderOnce.Do(func() {
+		consumableGrants = map[string]uint64{}
+		if f, err := os.Open(ConsumablesFile); err == nil {
+			sc := bufio.NewScanner(f)
+			for sc.Scan() {
+				k, v, _ := strings.Cut(strings.TrimSpace(sc.Text()), "=")
+				k = strings.TrimSpace(k)
+				if k == "" || strings.HasPrefix(k, "#") {
+					continue
+				}
+				var n uint64 = 1
+				fmt.Sscan(strings.TrimSpace(v), &n)
+				if _, seen := consumableGrants[k]; !seen {
+					consumableOrder = append(consumableOrder, k)
+				}
+				consumableGrants[k] = n
+			}
+			f.Close()
+		}
+		if len(consumableOrder) == 0 {
+			for _, k := range []string{"ulte_boost_25", "ulte_boost_50", "ulte_boost_100", "ulte_boost_200"} {
+				consumableOrder = append(consumableOrder, k)
+				consumableGrants[k] = DefaultConsumables[k]
+			}
+		}
+	})
+	return consumableOrder, consumableGrants
+}
+
+func consumablesPath() string {
+	return filepath.Join(filepath.Dir(settingsPath()), "consumables.json")
+}
+
+func loadConsumables() []ownedConsumable {
+	var owned []ownedConsumable
+	if b, err := os.ReadFile(consumablesPath()); err == nil {
+		if err := json.Unmarshal(b, &owned); err != nil {
+			logger.Warn("INVENTORY: consumables file unreadable: %v", err)
+		}
 	}
+	order, grants := consumableDefaults()
+	have := map[string]bool{}
+	for _, c := range owned {
+		have[c.Key] = true
+	}
+	added := false
+	for _, k := range order {
+		if !have[k] {
+			owned = append(owned, ownedConsumable{Key: k, Qty: grants[k]})
+			added = true
+		}
+	}
+	if added {
+		saveConsumables(owned)
+	}
+	return owned
+}
+
+func saveConsumables(owned []ownedConsumable) {
+	path := consumablesPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		logger.Error("INVENTORY: cannot create %s: %v", filepath.Dir(path), err)
+		return
+	}
+	b, _ := json.MarshalIndent(owned, "", "  ")
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		logger.Error("INVENTORY: cannot write %s: %v", path, err)
+	}
+}
+
+func (c ownedConsumable) toTDF(uid uint64) consumable {
+	var left uint64
+	if c.Activated > 0 {
+		if el := uint64(time.Now().Unix() - c.Activated); el < ConsumableDuration {
+			left = ConsumableDuration - el
+		}
+	}
+	return consumable{ACTT: uid, CKEY: c.Key, DURA: left, QANT: c.Qty}
+}
+
+func userConsumables() []consumable {
+	consumablesMu.Lock()
+	owned := loadConsumables()
+	consumablesMu.Unlock()
+
+	uid := currentPersonaID()
+	out := make([]consumable, 0, len(owned))
+	for _, c := range owned {
+		out = append(out, c.toTDF(uid))
+	}
+	return out
+}
+
+type useConsumableResponse struct {
+	CNSU consumable `tdf:"CNSU"`
+	UID  uint64     `tdf:"UID"`
+}
+
+func handleInventoryUseConsumable(p blaze.Packet) []byte {
+	key := tdfFindString(p.Payload, "IKEY")
+
+	consumablesMu.Lock()
+	owned := loadConsumables()
+	idx := -1
+	for i := range owned {
+		if owned[i].Key == key {
+			idx = i
+		}
+	}
+	if idx < 0 || owned[idx].Qty == 0 {
+		consumablesMu.Unlock()
+		logger.Warn("INVENTORY: useConsumable %q: not owned or none left", key)
+		return encodeBlazePacket(p.Component, p.Command, 0x0001, 0x3000, uint32(p.MessageId), nil)
+	}
+	for i := range owned {
+		owned[i].Activated = 0
+	}
+	owned[idx].Qty--
+	owned[idx].Activated = time.Now().Unix()
+	saveConsumables(owned)
+	used := owned[idx]
+	consumablesMu.Unlock()
+
+	uid := currentPersonaID()
+	body := &useConsumableResponse{CNSU: used.toTDF(uid), UID: uid}
+	reply := encodeReply(p, body, "Inventory useConsumable")
+	payload, err := component35TdfEncoder.Encode(body)
+	if err != nil || reply == nil {
+		return reply
+	}
+	return append(reply, encodeBlazePacket(Inventory, 0x000A, 0, blazeTypeNotification, 0, payload)...)
+}
+
+type inventoryTemplateResponse struct {
+	ILST []string `tdf:"ILST"`
+}
+
+func handleInventoryGetTemplate(p blaze.Packet) []byte {
+	order, _ := consumableDefaults()
+	list := append([]string{}, loadItems()...)
+	list = append(list, grantedPackKeys()...)
+	list = append(list, order...)
+	return encodeReply(p, &inventoryTemplateResponse{ILST: list}, "Inventory getTemplate")
+}
+
+func tdfFindString(payload []byte, tag string) string {
+	m := blaze.MustTdfMember(tag)
+	i := bytes.Index(payload, append(m.Bytes[:], 0x01))
+	if i < 0 {
+		return ""
+	}
+	n, k := tdfReadVarint(payload[i+4:])
+	start := i + 4 + k
+	if k == 0 || n == 0 || start+int(n) > len(payload) {
+		return ""
+	}
+	return string(payload[start : start+int(n)-1])
 }
