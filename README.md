@@ -310,6 +310,7 @@ Development relies on information from the original PS3 client:
 | Deploy screen and spawning                    | ✅ Working          |
 | Soldier entity and movement input             | ✅ Working          |
 | Weapon bundles / kit on the D-pad             | ✅ Working          |
+| RPCN integration                              | ✅ Working          |
 | First-person arms, weapon in hand, ammo       | 🔧 In progress      |
 | HUD health                                    | 🔧 In progress      |
 | Sound, redeploy                               | 🔧 In progress      |
@@ -318,7 +319,6 @@ Development relies on information from the original PS3 client:
 | Game reporting / end-of-round stats           | ⏳ Future           |
 | Leaderboards                                  | ⏳ Future           |
 | Friends / Presence / Platoons                 | ⏳ Future           |
-| RPCN integration                              | ⏳ Future           |
 
 ---
 
