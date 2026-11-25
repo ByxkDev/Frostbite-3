@@ -1,14 +1,18 @@
 package server
 
 import (
+	"bf4/server/dedicated"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -67,8 +71,14 @@ func StartHostListeners(r *Registry, extraPorts ...uint16) {
 		for p := range ports {
 			sorted = append(sorted, int(p))
 		}
-		sort.Ints(sorted)
+		slices.Sort(sorted)
 		logger.Info("HOST: starting host listeners on ports %v (UDP + TCP)", sorted)
+		logger.Info("BUILD: %s", dedicated.BuildTag)
+		if set := dedicated.EnvOverrides(); len(set) > 0 {
+			logger.Info("BUILD: WARNING - BF4_* environment variables are set and override the defaults: %v (close this window or clear them to run the defaults)", set)
+		} else {
+			logger.Info("BUILD: no BF4_* environment variables set - running the defaults")
+		}
 
 		for _, p := range sorted {
 			h := &hostListener{port: uint16(p), peers: map[string]*hostPeer{}, cap: capture}
@@ -100,6 +110,13 @@ func (h *hostListener) serveUDP() {
 			continue
 		}
 		h.packet("UDP", peer.String(), buf[:n])
+		if h.port == QosPort {
+			if reply := QosReply(buf[:n], peer); reply != nil {
+				if _, err := conn.WriteToUDP(reply, peer); err != nil {
+					logger.Warn("HOST: QoS reply to %s failed: %v", peer, err)
+				}
+			}
+		}
 	}
 }
 
@@ -136,6 +153,12 @@ func (h *hostListener) serveTCPConn(c net.Conn) {
 		n, err := c.Read(buf)
 		if n > 0 {
 			h.packet("TCP", peer, buf[:n])
+			if h.port == QosPort {
+				if resp := QosHTTP(buf[:n], c.RemoteAddr()); resp != nil {
+					c.Write(resp)
+					return
+				}
+			}
 		}
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
@@ -240,4 +263,94 @@ func spacedHex(b []byte) string {
 		out = append(out, digits[v>>4], digits[v&0xF])
 	}
 	return string(out)
+}
+
+var QosPort uint16 = 17502
+
+var qosReplies uint64
+
+func QosReply(p []byte, peer *net.UDPAddr) []byte {
+	if len(p) < 20 || (p[0]|p[1]|p[2]|p[3]) == 0 {
+		return nil
+	}
+	ip4 := peer.IP.To4()
+	if ip4 == nil {
+		return nil
+	}
+	r := make([]byte, 30)
+	copy(r, p[:20])
+
+	if binary.BigEndian.Uint32(p[4:8]) >= 2 {
+		n := qosCount(peer.IP.String(), p[0:12])
+		binary.BigEndian.PutUint32(r[12:16], n)
+	}
+	copy(r[20:24], ip4)
+	r[24] = byte(peer.Port >> 8)
+	r[25] = byte(peer.Port)
+	qosReplies++
+	if qosReplies <= 5 || qosReplies%100 == 0 {
+		logger.Info("HOST: QoS probe from %s (%d bytes, id %02x%02x%02x%02x) -> reply #%d", peer, len(p), p[0], p[1], p[2], p[3], qosReplies)
+	}
+	return r
+}
+
+var qosReqID uint32 = 1000
+
+func QosHTTP(req []byte, from net.Addr) []byte {
+	s := string(req)
+	if !strings.HasPrefix(s, "GET /qos/") {
+		return nil
+	}
+	line := s
+	if i := strings.Index(line, "\r\n"); i >= 0 {
+		line = line[:i]
+	}
+	path := strings.TrimPrefix(strings.Fields(line)[1], "/qos/")
+	query := ""
+	if i := strings.IndexByte(path, '?'); i >= 0 {
+		path, query = path[:i], path[i+1:]
+	}
+	q, _ := url.ParseQuery(query)
+	qosReqID++
+	id := qosReqID
+	secret := id*2654435761 | 1
+	var body string
+	switch path {
+	case "qos":
+		probes, size := 10, 20
+		if q.Get("qtyp") == "2" {
+			probes, size = 10, 1200
+		} else {
+			id = 1
+		}
+		body = fmt.Sprintf("<qos><numprobes>%d</numprobes><probesize>%d</probesize><qosport>%d</qosport><requestid>%d</requestid><reqsecret>%d</reqsecret></qos>",
+			probes, size, QosPort, id, secret)
+	case "firewall":
+		body = fmt.Sprintf("<firewall><numinterfaces>1</numinterfaces><ips><ips>%d</ips></ips><ports><ports>%d</ports></ports><requestid>%d</requestid><reqsecret>%d</reqsecret></firewall>",
+			QosPublicIP, QosPort, id, secret)
+	case "firetype":
+		body = "<firetype><firetype>0</firetype></firetype>"
+	default:
+		return nil
+	}
+	logger.Info("HOST: QoS HTTP %s from %s -> %s", line, from, body)
+	return []byte(fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body))
+}
+
+var QosPublicIP uint32 = 151<<24 | 244<<16 | 72<<8 | 66
+
+var (
+	qosMu     sync.Mutex
+	qosCounts = map[string]uint32{}
+)
+
+func qosCount(peer string, hdr []byte) uint32 {
+	key := peer + "/" + string(hdr)
+	qosMu.Lock()
+	defer qosMu.Unlock()
+	if len(qosCounts) > 4096 {
+		qosCounts = map[string]uint32{}
+	}
+	qosCounts[key]++
+	return qosCounts[key]
 }
