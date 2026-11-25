@@ -2,7 +2,6 @@ package blaze
 
 import (
 	"encoding/binary"
-
 	"bf4/logger"
 )
 
@@ -10,7 +9,6 @@ const (
 	PacketTypeRequest  uint16 = 0x0000
 	PacketTypeResponse uint16 = 0x1000
 	PacketTypeNotify   uint16 = 0x2000
-
 	blazeHeaderSize = 12
 )
 
@@ -44,51 +42,38 @@ func Parse(data []byte) Packet {
 	available := len(data) - blazeHeaderSize
 
 	if payloadLen > available {
-		logger.Warn("BLAZE payload truncated: header says %d bytes, only %d available", payloadLen, available,)
+		logger.Warn("BLAZE payload truncated: header says %d bytes, only %d available", payloadLen, available)
 		payloadLen = available
 	}
 
-	if payloadLen < 0 {
-		payloadLen = 0
-	}
-
+	payloadLen = max(payloadLen, 0)
 	p.Payload = make([]byte, payloadLen)
 	copy(p.Payload, data[blazeHeaderSize:blazeHeaderSize+payloadLen])
-
-	logger.Packet("RECEIVED", p.Component, p.Command, p.Type, p.MessageId, p.Payload,)
-
+	logger.Packet("RECEIVED", p.Component, p.Command, p.Type, p.MessageId, p.Payload)
 	return p
 }
 
-func EncodePacket(component uint16, command uint16, packetType uint16, messageID uint32, payload []byte,) []byte {
+func EncodePacket(component uint16, command uint16, packetType uint16, messageID uint32, payload []byte) []byte {
 	if len(payload) > 0xFFFF {
-		logger.Error(
-			"Blaze payload exceeds uint16 size: %d bytes",
-			len(payload),
-		)
+		logger.Error("Blaze payload exceeds uint16 size: %d bytes", len(payload),)
 		panic("Blaze payload exceeds uint16 size")
 	}
 
 	if messageID > 0xFFFF {
-		logger.Error(
-			"Blaze message ID exceeds uint16: %d",
-			messageID,
-		)
+		logger.Error("Blaze message ID exceeds uint16: %d", messageID,)
 		panic("Blaze message ID exceeds uint16")
 	}
 
 	data := make([]byte, blazeHeaderSize+len(payload))
 
-	binary.BigEndian.PutUint16(data[0:2], uint16(len(payload)),)
-	binary.BigEndian.PutUint16(data[2:4], component,)
-	binary.BigEndian.PutUint16(data[4:6], command,)
-	binary.BigEndian.PutUint16(data[6:8], 0,)
-	binary.BigEndian.PutUint16(data[8:10], packetType,)
-	binary.BigEndian.PutUint16(data[10:12], uint16(messageID),)
+	binary.BigEndian.PutUint16(data[0:2], uint16(len(payload)))
+	binary.BigEndian.PutUint16(data[2:4], component)
+	binary.BigEndian.PutUint16(data[4:6], command)
+	binary.BigEndian.PutUint16(data[6:8], 0)
+	binary.BigEndian.PutUint16(data[8:10], packetType)
+	binary.BigEndian.PutUint16(data[10:12], uint16(messageID))
 
 	copy(data[blazeHeaderSize:], payload)
-
-	logger.Packet("SENT", component, command, packetType, messageID, payload,)
-
+	logger.Packet("SENT", component, command, packetType, messageID, payload)
 	return data
 }
