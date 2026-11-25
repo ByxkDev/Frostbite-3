@@ -7,17 +7,21 @@ import (
 	"os/signal"
 	"syscall"
 
+	"bf4/ebx"
 	"bf4/logger"
 	"bf4/server/dedicated"
 )
 
 func main() {
 	c := dedicated.DefaultConfig()
+	var listLevels bool
+	flag.BoolVar(&listLevels, "list-levels", false, "print the EBX level/gamemode catalog and exit")
 	flag.StringVar(&c.Blaze, "blaze", c.Blaze, "Blaze game port (host:port) of the emulator")
 	flag.StringVar(&c.IP, "ip", c.IP, "IPv4 address players connect to")
 	flag.IntVar(&c.Port, "port", c.Port, "UDP/TCP game port players connect to")
 	flag.StringVar(&c.Name, "name", c.Name, "server name")
 	flag.StringVar(&c.Level, "level", c.Level, "level (LevelName from the level description)")
+	flag.StringVar(&c.LevelOptions, "level-options", c.LevelOptions, "LevelSetup inclusion options sent to players, \"Criterion=Value;...\" (default GameMode=<mode>; \"none\" for none)")
 	flag.StringVar(&c.Mode, "mode", c.Mode, "game mode (ConquestLarge0, ConquestSmall0, Domination0, Elimination0, GunMaster0, Obliteration, RushLarge0, SquadDeathMatch0, SquadObliteration0, TeamDeathMatch0)")
 	flag.StringVar(&c.Mod, "mod", c.Mod, "mod / map pack (DEFAULT, XPACK0..XPACK7)")
 	flag.IntVar(&c.Players, "players", c.Players, "player slots (max 64)")
@@ -32,6 +36,11 @@ func main() {
 	flag.StringVar(&c.CaptureDir, "captures", c.CaptureDir, "folder for packet captures")
 	flag.Parse()
 
+	if listLevels {
+		printLevels()
+		return
+	}
+
 	logger.Init(true, true)
 	defer logger.Close()
 
@@ -45,4 +54,22 @@ func main() {
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	<-sig
 	ds.Stop()
+}
+
+func printLevels() {
+	w, err := ebx.LoadWorld(ebx.DefaultCatalogFile)
+	if err != nil {
+		w = ebx.DefaultCatalog().Build()
+		fmt.Fprintf(os.Stderr, "bf4host: EBX catalog: %v (using built-in default)\n", err)
+	}
+	fmt.Printf("EBX catalog: %s\n\n", w.DB)
+	for _, l := range w.Catalog.Levels {
+		fmt.Printf("%-40s  %s\n", l.LevelName, l.Display)
+		for _, m := range l.Modes {
+			if setup, err := w.Setup(l.LevelName, m.Key); err == nil {
+				fmt.Printf("    -mode %-20s %-18s partition=%s\n", m.Key, "("+m.Name+")", setup.ModeGUID())
+			}
+		}
+		fmt.Println()
+	}
 }
