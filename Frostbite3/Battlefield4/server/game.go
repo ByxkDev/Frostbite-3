@@ -12,28 +12,29 @@ import (
 type Game struct {
 	ID         uint32
 	Name       string
-	Level      string 
+	Level      string
 	Mode       string
 	Attributes map[string]string
 	MaxPlayers uint16
+	Capacity   []uint16
 	Settings   uint32
 	State      uint32
 	Topology   uint32
-	Version    string 
-	HostID     uint64 
+	Version    string
+	HostID     uint64
 	HostIP     uint32
 	HostPort   uint16
-	Static     bool 
+	Static     bool
 	Created    time.Time
 
-	GameReg  uint32 
+	GameReg  uint32
 	HostName string
 	HostAddr IpPairAddress
-	HostPush func(b []byte) error 
+	HostPush func(b []byte) error
 	PGID     string
 
-	GameType string 
-	VOIP     uint32 
+	GameType string
+	VOIP     uint32
 
 	players []*Player
 }
@@ -41,7 +42,7 @@ type Game struct {
 type Player struct {
 	PersonaID  uint64
 	Name       string
-	ExternalID uint64 
+	ExternalID uint64
 	Address    IpPairAddress
 	Team       uint16
 	Slot       uint8
@@ -582,10 +583,10 @@ func (r *Registry) BF4Data(g *Game, joiner *Player) BF4GameData {
 		pgid = fmt.Sprintf("bf4emu-%08x-%d", g.ID, g.Created.Unix())
 	}
 
-	return BF4GameData{
+	d := BF4GameData{
 		ADMN: []uint64{g.HostPersona()},
 		ATTR: copyAttrs(g.Attributes),
-		CAP:  []uint16{g.MaxPlayers, 0, 4, 0},
+		CAP:  capacityList(g),
 		GID:  g.ID,
 		GMRG: g.GameReg,
 		GNAM: g.Name,
@@ -615,6 +616,8 @@ func (r *Registry) BF4Data(g *Game, joiner *Player) BF4GameData {
 		XNNC: []byte{},
 		XSES: []byte{},
 	}
+	applyHSProbe(g, joiner, &d)
+	return d
 }
 
 func gameHostAddress(g *Game) NetworkAddress {
@@ -685,9 +688,9 @@ type PeerGameOptions struct {
 	Mode       string
 	MaxPlayers uint16
 	Settings   uint32
-	GameType   string            
-	VOIP       uint32            
-	Attributes map[string]string 
+	GameType   string
+	VOIP       uint32
+	Attributes map[string]string
 }
 
 func (r *Registry) CreatePeerGame(host PlayerInfo, o PeerGameOptions, push func([]byte) error) (*Game, *Player) {
