@@ -22,25 +22,10 @@ type ClientSession struct {
 }
 
 var (
-	clientMu sync.Mutex
-
 	sessionsMu        sync.RWMutex
 	sessionsByPersona = map[uint64]*ClientSession{}
-	sessionData       = map[*ClientSession]ClientSession{} 
+	sessionData       = map[*ClientSession]ClientSession{}
 )
-
-func newClientSession(connID uint64, push func([]byte) error) *ClientSession {
-	return &ClientSession{ConnID: connID, Push: push, UserAttr: userAttributes}
-}
-
-func handleClientPacket(s *ClientSession, data []byte) []byte {
-	clientMu.Lock()
-	defer clientMu.Unlock()
-
-	s.activate()
-	defer s.capture()
-	return HandlePacket(data)
-}
 
 func (s *ClientSession) activate() {
 	sessionsMu.RLock()
@@ -117,28 +102,6 @@ func (s *ClientSession) Snapshot() ClientSession {
 	return *s
 }
 
-func closeClientSession(s *ClientSession) {
-	d := s.Snapshot()
-
-	sessionsMu.Lock()
-	delete(sessionData, s)
-	if sessionsByPersona[d.PersonaID] == s {
-		delete(sessionsByPersona, d.PersonaID)
-	}
-	online := len(sessionsByPersona)
-	sessionsMu.Unlock()
-
-	if d.PersonaID == 0 {
-		return
-	}
-	closePeerGamesOf(d.PersonaID, d.OnlineID)
-	for _, gid := range server.Games.LeaveAll(d.PersonaID) {
-		logger.Info("SESSIONS: %q left game %d (disconnected)", d.OnlineID, gid)
-		notifyPlayersOfRemoval(gid, d.PersonaID)
-	}
-	logger.Info("SESSIONS: %q (%d) offline (%d PS3s online)", d.OnlineID, d.PersonaID, online)
-}
-
 func SessionByPersona(personaID uint64) *ClientSession {
 	sessionsMu.RLock()
 	defer sessionsMu.RUnlock()
@@ -167,32 +130,6 @@ func pushToPersona(personaID uint64, b []byte) {
 	if err := s.Push(b); err != nil {
 		logger.Warn("SESSIONS: push to %d failed: %v", personaID, err)
 	}
-}
-
-func attrsFor(personaID uint64) uint64 {
-	if personaID != 0 && personaID == currentPersonaID() {
-		return currentUserAttributes()
-	}
-	if s := SessionByPersona(personaID); s != nil {
-		return s.Snapshot().UserAttr
-	}
-	return userAttributes
-}
-
-func addressFor(personaID uint64) *ipPairAddress {
-	if personaID != 0 && personaID == currentPersonaID() {
-		userStateMu.Lock()
-		defer userStateMu.Unlock()
-		if lastAddress != nil {
-			a := *lastAddress
-			return &a
-		}
-		return nil
-	}
-	if s := SessionByPersona(personaID); s != nil {
-		return s.Snapshot().Address
-	}
-	return nil
 }
 
 func notifyPlayersOfRemoval(gid uint32, personaID uint64) {
