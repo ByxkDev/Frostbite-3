@@ -15,24 +15,24 @@ import (
 	"sync"
 )
 
-var ErrLegacyWireNotPorted = errors.New("tdf: legacy wire primitive not ported")
+var ErrLegacyWireNotPorted = errors.New("tdf: legacy wire primitive")
 
 type TdfBaseType byte
 
 const (
-	TdfTypeInteger         TdfBaseType = 0x0 
+	TdfTypeInteger         TdfBaseType = 0x0
 	TdfTypeMin             TdfBaseType = 0x0
-	TdfTypeString          TdfBaseType = 0x1 
-	TdfTypeBinary          TdfBaseType = 0x2 
-	TdfTypeStruct          TdfBaseType = 0x3 
-	TdfTypeList            TdfBaseType = 0x4 
-	TdfTypeMap             TdfBaseType = 0x5 
-	TdfTypeUnion           TdfBaseType = 0x6 
+	TdfTypeString          TdfBaseType = 0x1
+	TdfTypeBinary          TdfBaseType = 0x2
+	TdfTypeStruct          TdfBaseType = 0x3
+	TdfTypeList            TdfBaseType = 0x4
+	TdfTypeMap             TdfBaseType = 0x5
+	TdfTypeUnion           TdfBaseType = 0x6
 	TdfTypeVariable        TdfBaseType = 0x7
-	TdfTypeBlazeObjectType TdfBaseType = 0x8 
-	TdfTypeBlazeObjectID   TdfBaseType = 0x9 
-	TdfTypeFloat           TdfBaseType = 0xA 
-	TdfTypeTimeValue       TdfBaseType = 0xB 
+	TdfTypeBlazeObjectType TdfBaseType = 0x8
+	TdfTypeBlazeObjectID   TdfBaseType = 0x9
+	TdfTypeFloat           TdfBaseType = 0xA
+	TdfTypeTimeValue       TdfBaseType = 0xB
 	TdfTypeMax             TdfBaseType = 0xC
 )
 
@@ -147,7 +147,7 @@ type TdfMember struct {
 }
 
 func NewTdfMember(tagString string) (TdfMember, error) {
-	for i := 0; i < len(tagString); i++ {
+	for i := range len(tagString) {
 		if tagString[i] > 0x7F {
 			return TdfMember{}, fmt.Errorf("tdf: tag can only consist of ASCII characters from 32 to 95 (%q)", tagString)
 		}
@@ -160,7 +160,7 @@ func NewTdfMember(tagString string) (TdfMember, error) {
 		return TdfMember{}, fmt.Errorf("tdf: tag length can be [1;4] (%q)", tagString)
 	}
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if tag[i] < ' ' || tag[i] > '_' {
 			return TdfMember{}, fmt.Errorf("tdf: tag can only consist of ASCII characters from 32 to 95 (%q)", tagString)
 		}
@@ -360,13 +360,13 @@ type tdfField struct {
 }
 
 type structInfo struct {
-	declared []tdfField     
-	sorted   []tdfField    
-	byTag    map[string]int 
+	declared []tdfField
+	sorted   []tdfField
+	byTag    map[string]int
 }
 
 var (
-	structInfoCache sync.Map 
+	structInfoCache sync.Map
 	emptyStructInfo = &structInfo{byTag: map[string]int{}}
 )
 
@@ -425,10 +425,10 @@ type unionMember struct {
 type unionInfo struct {
 	activeIndex int
 	members     []unionMember
-	byActive    map[byte]int 
+	byActive    map[byte]int
 }
 
-var unionInfoCache sync.Map 
+var unionInfoCache sync.Map
 
 func getUnionInfo(t reflect.Type) (*unionInfo, error) {
 	if t.Kind() != reflect.Struct {
@@ -515,7 +515,7 @@ func unionCurrent(v reflect.Value, info *unionInfo) (active byte, member reflect
 	return active, f.Elem(), true
 }
 
-func unionValueOf(union interface{}) (reflect.Value, *unionInfo, error) {
+func unionValueOf(union any) (reflect.Value, *unionInfo, error) {
 	v := reflect.ValueOf(union)
 	for v.Kind() == reflect.Ptr {
 		if v.IsNil() {
@@ -536,7 +536,7 @@ func unionValueOf(union interface{}) (reflect.Value, *unionInfo, error) {
 	return v, info, nil
 }
 
-func UnionGetValue(union interface{}) interface{} {
+func UnionGetValue(union any) any {
 	v, info, err := unionValueOf(union)
 	if err != nil {
 		return nil
@@ -550,7 +550,7 @@ func UnionGetValue(union interface{}) interface{} {
 	return member.Addr().Interface()
 }
 
-func UnionGetValueName(union interface{}) string {
+func UnionGetValueName(union any) string {
 	v, info, err := unionValueOf(union)
 	if err != nil {
 		return ""
@@ -567,7 +567,7 @@ func UnionGetValueName(union interface{}) string {
 	return ""
 }
 
-func UnionActiveMemberType(union interface{}, active byte) reflect.Type {
+func UnionActiveMemberType(union any, active byte) reflect.Type {
 	_, info, err := unionValueOf(union)
 	if err != nil {
 		return nil
@@ -579,7 +579,7 @@ func UnionActiveMemberType(union interface{}, active byte) reflect.Type {
 	return nil
 }
 
-func UnionActiveMemberName(union interface{}, active byte) string {
+func UnionActiveMemberName(union any, active byte) string {
 	_, info, err := unionValueOf(union)
 	if err != nil {
 		return ""
@@ -591,7 +591,7 @@ func UnionActiveMemberName(union interface{}, active byte) string {
 	return ""
 }
 
-func UnionSetValue(union interface{}, value interface{}) error {
+func UnionSetValue(union any, value any) error {
 	pv := reflect.ValueOf(union)
 	if pv.Kind() != reflect.Ptr || pv.IsNil() {
 		return errors.New("tdf: UnionSetValue needs a non-nil pointer to a union struct")
@@ -847,7 +847,7 @@ func NewTdfFactory() *TdfFactory {
 	}
 }
 
-func (f *TdfFactory) RegisterTdfType(example interface{}, tdfID uint32) error {
+func (f *TdfFactory) RegisterTdfType(example any, tdfID uint32) error {
 	if example == nil {
 		return errors.New("tdf: cannot register nil")
 	}
@@ -875,7 +875,7 @@ func (f *TdfFactory) RegisterTdfType(example interface{}, tdfID uint32) error {
 	return nil
 }
 
-func (f *TdfFactory) RegisterTdfTypes(types map[uint32]interface{}) error {
+func (f *TdfFactory) RegisterTdfTypes(types map[uint32]any) error {
 	for id, example := range types {
 		if err := f.RegisterTdfType(example, id); err != nil {
 			return err
@@ -913,13 +913,13 @@ func (f *TdfFactory) CreateLegacyDecoder() *TdfLegacyDecoder {
 }
 
 type ITdfEncoder interface {
-	Encode(obj interface{}) ([]byte, error)
-	WriteTo(w io.Writer, obj interface{}) error
+	Encode(obj any) ([]byte, error)
+	WriteTo(w io.Writer, obj any) error
 }
 
 type ITdfDecoder interface {
-	Decode(data []byte, out interface{}) error
-	DecodeFrom(r io.Reader, out interface{}) error
+	Decode(data []byte, out any) error
+	DecodeFrom(r io.Reader, out any) error
 }
 
 var (
@@ -929,7 +929,7 @@ var (
 	_ ITdfDecoder = (*TdfLegacyDecoder)(nil)
 )
 
-func prepareDecodeTarget(out interface{}) (reflect.Value, *structInfo, error) {
+func prepareDecodeTarget(out any) (reflect.Value, *structInfo, error) {
 	rv := reflect.ValueOf(out)
 	if rv.Kind() != reflect.Ptr || rv.IsNil() {
 		return reflect.Value{}, nil, errors.New("tdf: Decode needs a non-nil pointer to a struct")
@@ -961,7 +961,7 @@ type TdfEncoder struct {
 	heat1Bug bool
 }
 
-func (e *TdfEncoder) Encode(obj interface{}) ([]byte, error) {
+func (e *TdfEncoder) Encode(obj any) ([]byte, error) {
 	var buf bytes.Buffer
 	if err := e.encodeInto(&buf, obj); err != nil {
 		return nil, err
@@ -969,7 +969,7 @@ func (e *TdfEncoder) Encode(obj interface{}) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (e *TdfEncoder) WriteTo(w io.Writer, obj interface{}) error {
+func (e *TdfEncoder) WriteTo(w io.Writer, obj any) error {
 	var buf bytes.Buffer
 	if err := e.encodeInto(&buf, obj); err != nil {
 		return err
@@ -978,7 +978,7 @@ func (e *TdfEncoder) WriteTo(w io.Writer, obj interface{}) error {
 	return err
 }
 
-func (e *TdfEncoder) encodeInto(buf *bytes.Buffer, obj interface{}) error {
+func (e *TdfEncoder) encodeInto(buf *bytes.Buffer, obj any) error {
 	v, ok := indirect(reflect.ValueOf(obj))
 	if !ok || v.Kind() != reflect.Struct {
 		return errors.New("tdf: Encode needs a struct or a non-nil pointer to a struct")
@@ -1001,7 +1001,7 @@ func (e *TdfEncoder) writeStructBody(buf *bytes.Buffer, v reflect.Value) error {
 		t := derefType(fv.Type())
 		base := tdfBaseTypeOf(t)
 		if base == TdfTypeMax {
-			continue 
+			continue
 		}
 
 		val, ok := indirect(fv)
@@ -1049,7 +1049,7 @@ func (e *TdfEncoder) writeValue(buf *bytes.Buffer, tag TdfMember, t reflect.Type
 		if err := e.writeStructBody(buf, v); err != nil {
 			return err
 		}
-		buf.WriteByte(0x00) 
+		buf.WriteByte(0x00)
 
 	case TdfTypeList:
 		return e.writeList(buf, tag, t, v)
@@ -1169,7 +1169,7 @@ func (e *TdfEncoder) writeUnion(buf *bytes.Buffer, v reflect.Value, listElement 
 	if err := e.writeStructBody(buf, member); err != nil {
 		return err
 	}
-	buf.WriteByte(0x00) 
+	buf.WriteByte(0x00)
 	return nil
 }
 
@@ -1189,7 +1189,7 @@ func (e *TdfEncoder) writeVariable(buf *bytes.Buffer, tag TdfMember, v reflect.V
 		return fmt.Errorf("tdf: type %s not supported as a variable", rt)
 	}
 
-	buf.WriteByte(1) 
+	buf.WriteByte(1)
 	writeVarInt(buf, uint64(e.factory.GetTdfID(rt)))
 	buf.Write(tag.Bytes[:])
 	buf.WriteByte(byte(base))
@@ -1198,7 +1198,7 @@ func (e *TdfEncoder) writeVariable(buf *bytes.Buffer, tag TdfMember, v reflect.V
 		return err
 	}
 
-	buf.WriteByte(0x00) 
+	buf.WriteByte(0x00)
 	return nil
 }
 
@@ -1207,7 +1207,7 @@ type TdfDecoder struct {
 	heat1Bug bool
 }
 
-func (d *TdfDecoder) Decode(data []byte, out interface{}) error {
+func (d *TdfDecoder) Decode(data []byte, out any) error {
 	target, info, err := prepareDecodeTarget(out)
 	if err != nil {
 		return err
@@ -1222,7 +1222,7 @@ func (d *TdfDecoder) Decode(data []byte, out interface{}) error {
 	return nil
 }
 
-func (d *TdfDecoder) DecodeFrom(r io.Reader, out interface{}) error {
+func (d *TdfDecoder) DecodeFrom(r io.Reader, out any) error {
 	data, err := readAll(r)
 	if err != nil {
 		return err
@@ -1434,7 +1434,7 @@ func (d *TdfDecoder) readStructBody(r *tdfReader, sv reflect.Value, info *struct
 			return nil
 		}
 
-		r.pos-- 
+		r.pos--
 
 		if err := d.readTdf(r, sv, info); err != nil {
 			return err
@@ -1472,7 +1472,7 @@ func (d *TdfDecoder) readList(r *tdfReader, field reflect.Value) error {
 		return err
 	}
 
-	if count > uint64(r.remaining()) { 
+	if count > uint64(r.remaining()) {
 		return io.ErrUnexpectedEOF
 	}
 
@@ -1538,7 +1538,7 @@ func (d *TdfDecoder) readMap(r *tdfReader, field reflect.Value) error {
 		return io.ErrUnexpectedEOF
 	}
 
-	if !field.IsValid() { 
+	if !field.IsValid() {
 		for i := uint64(0); i < count; i++ {
 			if err := d.readValue(r, TdfBaseType(kb), reflect.Value{}); err != nil {
 				return err
@@ -1610,7 +1610,7 @@ func (d *TdfDecoder) readUnion(r *tdfReader, field reflect.Value) error {
 	}
 
 	idx, ok := info.byActive[am]
-	if !ok { 
+	if !ok {
 		return d.readStructBody(r, reflect.Value{}, emptyStructInfo)
 	}
 
@@ -1648,7 +1648,7 @@ func (d *TdfDecoder) readVariable(r *tdfReader, field reflect.Value) error {
 		return err
 	}
 
-	if _, err := r.readBytes(TdfTagLength); err != nil { 
+	if _, err := r.readBytes(TdfTagLength); err != nil {
 		return err
 	}
 
@@ -1784,7 +1784,7 @@ func legacyDefaultTypeSize(t TdfLegacyBaseType) int {
 	case LegacyTypeArray:
 		return 1
 	}
-	return 0 
+	return 0
 }
 
 func legacyIntInfo(t TdfLegacyBaseType) (width int, signed bool, ok bool) {
@@ -1869,7 +1869,7 @@ type TdfLegacyEncoder struct {
 	factory *TdfFactory
 }
 
-func (e *TdfLegacyEncoder) Encode(obj interface{}) ([]byte, error) {
+func (e *TdfLegacyEncoder) Encode(obj any) ([]byte, error) {
 	var buf bytes.Buffer
 	if err := e.encodeInto(&buf, obj); err != nil {
 		return nil, err
@@ -1877,7 +1877,7 @@ func (e *TdfLegacyEncoder) Encode(obj interface{}) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (e *TdfLegacyEncoder) WriteTo(w io.Writer, obj interface{}) error {
+func (e *TdfLegacyEncoder) WriteTo(w io.Writer, obj any) error {
 	var buf bytes.Buffer
 	if err := e.encodeInto(&buf, obj); err != nil {
 		return err
@@ -1886,7 +1886,7 @@ func (e *TdfLegacyEncoder) WriteTo(w io.Writer, obj interface{}) error {
 	return err
 }
 
-func (e *TdfLegacyEncoder) encodeInto(buf *bytes.Buffer, obj interface{}) error {
+func (e *TdfLegacyEncoder) encodeInto(buf *bytes.Buffer, obj any) error {
 	v, ok := indirect(reflect.ValueOf(obj))
 	if !ok || v.Kind() != reflect.Struct {
 		return errors.New("tdf: Encode needs a struct or a non-nil pointer to a struct")
@@ -1990,7 +1990,7 @@ func (e *TdfLegacyEncoder) writeStruct(buf *bytes.Buffer, v reflect.Value) error
 	if err := e.writeStructBody(buf, v); err != nil {
 		return err
 	}
-	buf.WriteByte(0x00) 
+	buf.WriteByte(0x00)
 	return nil
 }
 
@@ -2115,7 +2115,7 @@ type TdfLegacyDecoder struct {
 	factory *TdfFactory
 }
 
-func (d *TdfLegacyDecoder) Decode(data []byte, out interface{}) error {
+func (d *TdfLegacyDecoder) Decode(data []byte, out any) error {
 	target, info, err := prepareDecodeTarget(out)
 	if err != nil {
 		return err
@@ -2130,7 +2130,7 @@ func (d *TdfLegacyDecoder) Decode(data []byte, out interface{}) error {
 	return nil
 }
 
-func (d *TdfLegacyDecoder) DecodeFrom(r io.Reader, out interface{}) error {
+func (d *TdfLegacyDecoder) DecodeFrom(r io.Reader, out any) error {
 	data, err := readAll(r)
 	if err != nil {
 		return err
@@ -2175,7 +2175,7 @@ func (d *TdfLegacyDecoder) readValue(r *tdfReader, base TdfLegacyBaseType, size 
 			field.Set(nv)
 			return nil
 		case reflect.Interface:
-			field = reflect.Value{} 
+			field = reflect.Value{}
 		}
 	}
 
@@ -2308,7 +2308,7 @@ func (d *TdfLegacyDecoder) readArray(r *tdfReader, field reflect.Value) error {
 		return io.ErrUnexpectedEOF
 	}
 
-	if !field.IsValid() { 
+	if !field.IsValid() {
 		for i := uint64(0); i < count; i++ {
 			if err := d.readValue(r, base, size, reflect.Value{}); err != nil {
 				return err
