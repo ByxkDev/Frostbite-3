@@ -1,6 +1,6 @@
 # BF4 Blaze Emulator
 
-[![Status](https://img.shields.io/badge/status-WIP-orange)](https://github.com/ByxkDev/Frostbite-3)
+[![Status](https://img.shields.io/badge/status-in%20game-brightgreen)](https://github.com/ByxkDev/Frostbite-3)
 [![Language](https://img.shields.io/badge/language-Go-blue)](https://go.dev/)
 [![Platform](https://img.shields.io/badge/platform-PS3-lightgrey)](https://www.playstation.com/)
 
@@ -8,25 +8,43 @@
 
 ---
 
-# ⚠️ Work In Progress
+# Overview
 
-This project is an experimental replacement backend for **Battlefield 4 (PlayStation 3)**.
+This project is a replacement backend for **Battlefield 4 (PlayStation 3)**.
 
-The goal is to recreate the EA backend infrastructure so that the original Battlefield 4 PS3 client can talk to a custom server **without modifying the game executable**.
+It recreates EA's online infrastructure (Blaze) **and** a Frostbite dedicated game server, so the original, unmodified Battlefield 4 PS3 client can log in, find a server, join it and spawn into a multiplayer map, **without modifying the game executable**.
 
 ## Where we are now
 
-The original PS3 client now gets **all the way into the game**:
+Most of the game is working. The original PS3 client goes from boot all the way into a running multiplayer map:
 
 * ✅ Boots, connects and logs in to our Blaze backend
 * ✅ Reaches the **main menu** and the multiplayer menus
 * ✅ Loads soldier, stats, entitlements, inventory, packs and user settings
 * ✅ **Test Range is playable**
-* ✅ Server browser, matchmaking and join flow are handled by our GameManager
-* ✅ A headless **dedicated server** logs in to Blaze, registers a game and accepts joining players
-* ⏳ **Real multiplayer matches are not playable yet** the client reaches the dedicated server's game port, but the in-game Frostbite network protocol (UDP) still has to be reverse engineered and written from scratch
+* ✅ Server browser (server info screen, Ranked, settings) and the join flow
+* ✅ **Frostbite game connection works**: the encrypted connection request is solved (ProtoTunnel + CommUDP), the PS3 connects to our game server
+* ✅ Time sync, level load and bundle streaming: **Siege of Shanghai (TDM) loads**, including buildings, the skyscraper and ~965 map objects
+* ✅ Deploy screen, team, squad, spawn points and **spawning into the map** with the HUD and minimap
+* ✅ Soldier entity is created on the PS3, controlled by the player and placed at the spawn point; the PS3 streams its movement input to the server
+* ✅ Kit weapons are sent and their weapon bundles load (the D-pad shows the kit)
+* 🔧 **Still in progress:** first-person arms / weapon in hand and ammo, HUD health, sounds, redeploy, other maps and game modes
 
-The Blaze side (everything up to "join game") is largely done. The current wall is the **Frostbite game protocol** that EA's own dedicated servers spoke see [The Frostbite Game Protocol](#the-frostbite-game-protocol--the-24-byte-connection-request).
+Everything up to "spawn in the map" works. The remaining work is the last parts of the in-game Frostbite protocol: the soldier's visuals, weapons and gameplay state.
+
+---
+
+# ⚠️ Not included in this repository
+
+Some parts of the project are **not published** in this repo:
+
+| Not included | What it is |
+| --- | --- |
+| `Battlefield4/server/dedicated/` | The Frostbite **dedicated game server** (the in-game UDP protocol: connection, level loading, ghosts, spawning, soldier, weapons) |
+| `Battlefield4/data/` | Runtime data: game list, stats, items, packs, CDN files, ProtoTunnel settings and captures |
+| `Battlefield4/data/ebx/` (EBX data) | Game data extracted from the user's own copy of the game (network registry, spawn points, kits, weapon unlock tables) |
+
+Because of this, the repository on its own **does not build a full working server**. It shows the Blaze backend, the networking and the overall structure. No game files, EA code or EA assets are distributed.
 
 ---
 
@@ -41,8 +59,8 @@ The Blaze side (everything up to "join game") is largely done. The current wall 
         |                              |                                |
         | TLS (ProtoSSL)               | HTTP                           | UDP game traffic
         v                              v                                v
- GOS Redirector :42127          Nucleus / Battlelog :80          Dedicated server :25210
-        |                       (PS3 login, stats API)           (Frostbite game protocol)
+ GOS Redirector :42127          Nucleus / QoS (HTTP)              Dedicated server :25210
+        |                       (PS3 login, ping sites)          (Frostbite game protocol)
         | GetServerInstance                                             ^
         v                                                               |
  Blaze server :33152  <---------- Blaze TCP (as "warsaw server") -------+
@@ -56,14 +74,13 @@ The Blaze side (everything up to "join game") is largely done. The current wall 
 | -------------------- | --------------- | ---------- | ---------------------------------------- |
 | GOS Redirector       | `42127`         | TLS / TCP  | `main.go`, `network/redirector/`         |
 | Blaze server         | `33152`         | TCP        | `main.go`, `components/`, `blaze/`       |
-| QoS / host listeners | `17502`         | UDP / TCP  | `server/host.go`                         |
+| QoS / ping sites     | `17502`         | UDP / HTTP | `server/host.go`                         |
 | Nucleus (PS3 login)  | `80`            | HTTP       | `network/nucleus/`                       |
-| Battlelog API        | `80`            | HTTP       | `network/battlelog/`                     |
-| Dedicated server     | `25210`         | UDP + TCP  | `server/dedicated/`, `cmd/bf4host/`      |
+| Dedicated server     | `25210`         | UDP        | `server/dedicated/` (not included)       |
 
 ---
 
-# Login Flow (working)
+# Login and Join Flow (working)
 
 ```text
 DNS redirection
@@ -75,97 +92,43 @@ GOS Redirector (TLS)  ->  GetServerInstance
 Blaze server :33152
       |
       +-- Util PreAuth / Ping / FetchClientConfig
-      +-- ConsoleAuthentication (comp 35, cmd 10)  <- PSN XI5 ticket
-      |      -> UserSessions notifications (ExtendedData / UserAdded / UserUpdated)
-      +-- Util PostAuth / GetTelemetryServer
-      +-- Authentication ListUserEntitlements2 / GetAuthToken / GrantEntitlement2
-      +-- UserSessions UpdateNetworkInfo / SetUserInfoAttribute / ResumeSession
-      +-- Util UserSettingsLoad / Save / LoadAll / SetUserMode / SetClientMetrics
-      +-- Stats GetStatGroup / GetStatsByGroupAsync
-      +-- Inventory GetItems, Packs, AssociationLists
+      +-- ConsoleAuthentication (PSN XI5 ticket)
+      +-- UserSessions, PostAuth, telemetry, entitlements
+      +-- User settings, Stats, Inventory, Packs, AssociationLists
       |
       v
-Main menu  ->  Test Range  |  Server browser / Matchmaking  ->  JoinGame
-                                                                   |
-                                                                   v
-                                                   Dedicated server game port
-                                                   (Frostbite protocol - WIP)
+Main menu  ->  Test Range  |  Server browser  ->  JoinGame
+                                                    |
+                                                    v
+                                     Dedicated server (Frostbite, UDP)
+                                                    |
+      ProtoTunnel / CommUDP handshake  ->  time sync  ->  LoadLevel
+      ->  bundle / sub-level streaming  ->  level loaded  ->  ghosts
+      ->  deploy screen  ->  spawn  ->  soldier, HUD, movement input
 ```
 
-# The Frostbite Game Protocol — the 24-byte connection request
+---
 
-This is the **main open problem** of the project.
+# The Frostbite Game Protocol
 
-On EA's original infrastructure, Blaze only handles the "lobby" side: login, server browser, matchmaking and putting a player into a game. The actual match is run by a **Frostbite dedicated server** (the "warsaw server"). The PS3 talks to that server over **UDP using Frostbite's own game protocol**, which is completely separate from Blaze/TDF.
+On EA's infrastructure, Blaze only handles the lobby side (login, server browser, putting a player into a game). The match itself runs on a **Frostbite dedicated server** that talks to the PS3 over UDP with Frostbite's own protocol. No public documentation of it exists, so it was reverse engineered from the PS3 client and written from scratch.
 
-**No public implementation or documentation of BF4's game protocol exists**, so it has to be reverse engineered and most likely written from scratch.
+What is implemented (in the dedicated server, not included in this repo):
 
-### What we know so far
+* **Connection:** the "24-byte connection request" is a ProtoTunnel packet (RC4 keyed from the game's join data) carrying a CommUDP handshake. The server answers and the connection opens.
+* **Game frames:** the channel layout of a game frame (messages, ghosts, state sync, movement).
+* **Messages:** time sync, LoadLevel, bundle baselines, level-loaded ack, tiny events, server info, squads, difficulty, deploy / player events, OnPlayerSpawned.
+* **Sub-levels and bundles:** the map's sub-levels and the kit's weapon bundles are streamed in the order the client expects.
+* **Ghosts (replicated objects):** players, player manager, game-mode objects, sub-levels, spawn points, ~965 map objects and the soldier entity with its creation data and components (health, customization, weapons).
+* **Movement:** the move channel is answered, so the PS3 sends its player input.
 
-When a PS3 joins a game, Blaze tells it the dedicated server's address. The first thing the PS3 sends to the game port is a **24-byte connection request**, repeated until it gets an answer:
-
-```text
-offset  size  meaning
-------  ----  -------------------------------------------------
-0       1     counter   - increases by 3 on every retry
-1       1     0x80      - constant flag
-2..23   22    encrypted payload
-```
-
-Example of what the dedicated server logs:
-
-```text
-DEDICATED:   1.2.3.4:3659 (Player) connection request #1:  counter=N   flag=0x80, 22 encrypted bytes
-DEDICATED:   1.2.3.4:3659 (Player) connection request #5:  counter=N+12 flag=0x80, 22 encrypted bytes
-```
-
-Observations:
-
-* Byte 0 is a **counter that rises by 3 per retry** (wrapping as a byte), not a fixed sequence number. This looks like a sequence/handshake counter rather than a packet type.
-* Byte 1 is always **`0x80`**, most likely a "connection / handshake" packet type flag.
-* The remaining **22 bytes are encrypted**. The key/scheme is not known yet. Likely candidates are a key derived from Blaze data the client already received (game ID, persona ID, session key, the TOKN/UUID from the join notification) or a key exchange that the server is expected to start.
-* Without a correct answer from the server, the PS3 keeps retrying and eventually times out back to the menu.
-
-### What the dedicated server does today
-
-`server/dedicated/` is a complete Blaze-side dedicated server:
-
-1. Logs in to our Blaze server as the **"warsaw server"** account
-2. Creates the game (`CreateGame` → `FinalizeGameCreation` → `AdvanceGameState` to `IN_GAME`)
-3. Opens the game port (UDP + TCP, default `25210`)
-4. Receives `NotifyPlayerJoining` / `NotifyPlayerClaimingReservation` and waits for the player
-5. Hands **every UDP packet** on the game port to a pluggable `GameEngine`
-6. Reports the player back to Blaze with `UpdateMeshConnection` (connected / disconnected)
-
-The engine interface is where the Frostbite protocol will live:
-
-```go
-type GameEngine interface {
-    Name() string
-    HandlePacket(from *net.UDPAddr, player string, data []byte) (replies [][]byte, connected bool)
-    Capture(proto, from string, data []byte)
-}
-```
-
-Right now the only engine is the **`CaptureEngine`**: it answers nothing, decodes the 24-byte request header (counter / flag) and writes all game-port traffic to `data/captures/dedicated_<timestamp>.tsv` (`time  proto  from  player  len  hex`) for analysis.
-
-`-fake-connect` exists for **testing only**: it reports players as connected on their first packet so the Blaze side of the flow can be tested past the join.
-
-### What still needs to be done here
-
-* Collect many captures of the connection request (different players, games, retries)
-* Find the encryption used on the 22-byte payload in the PS3 `EBOOT.ELF`
-* Work out what the server must reply to complete the handshake
-* Reverse engineer the post-handshake packet stream (ghosts / replication, player input, level loading, chat, etc.)
-* Write a real `GameEngine` implementation effectively a **Frostbite 3 server from scratch**
-
-Help with this part is **very** welcome see [Contributing](#contributing).
+Still open: first-person arms and weapon visuals, ammo, HUD health, sound, redeploy, and gameplay (shooting, damage, scoring) between players.
 
 ---
 
 # TLS / ProtoSSL
 
-The client successfully:
+The client:
 
 * Connects to the custom redirector
 * Sends a TLS ClientHello
@@ -231,26 +194,18 @@ Compatibility comes purely from DNS redirection, TLS compatibility and recreatin
 
 # Authentication & PSN
 
-* `components/authentication.go` — ConsoleAuthentication / login handling
-* `psn/xi5ticket.go` — parses the PSN **XI5 ticket** the PS3 sends (online ID, account data, signature)
-* `network/nucleus/` — HTTP endpoints for the PS3 Nucleus login (`/ps3.php`, `/success`)
+* `components/authentication.go`: ConsoleAuthentication / login handling
+* `psn/xi5ticket.go`: parses the PSN **XI5 ticket** the PS3 sends (online ID, account data, signature)
+* `network/nucleus/`: HTTP endpoints for the PS3 Nucleus login (`/ps3.php`, `/success`)
 * Persona IDs are derived from the PSN online ID, so every player keeps the same persona between sessions
 
-RPCN is **not supported yet**; the XI5 parser is the groundwork for it.
-
----
-
-# Battlelog API
-
-`network/battlelog/` serves a small Battlelog-style HTTP API and status page
-
-this is not working yet.
+RPCN/RPCS3 is **Supported**
 
 ---
 
 # Logging
 
-A full logging system is used throughout the server (`logger/logger.go`) with `DEBUG`, `INFO`, `TRACE`, `WARN` and `ERROR` levels, hex dumps of unknown packets, and TDF field tracing. Unknown Blaze commands are always logged with their raw payload, which is how most new commands are discovered.
+A full logging system is used throughout the server (`logger/logger.go`) with `DEBUG`, `INFO`, `TRACE`, `WARN` and `ERROR` levels, hex dumps of unknown packets and TDF field tracing. Unknown Blaze commands are always logged with their raw payload, which is how most new commands are discovered.
 
 ---
 
@@ -264,63 +219,33 @@ Frostbite-3/
 │
 └── Frostbite3/
     └── Battlefield4/
-        ├── main.go                 # entry point: redirector, Blaze, QoS, Nucleus, Battlelog, dedicated server
-        ├── go.mod / go.sum
+        ├── main.go                 # entry point: redirector, Blaze, QoS, Nucleus, DNS, dedicated server
         │
-        ├── blaze/
-        │   ├── packet.go           # Blaze packet header parsing
-        │   └── tdf.go              # TDF encoder / decoder
-        │
-        ├── components/             # Blaze component handlers
-        │   ├── components.go       # dispatcher, Util, Redirector, ConsoleAuthentication
-        │   ├── authentication.go   # login / authentication
-        │   ├── session.go          # UserSessions, AssociationLists, PostAuth, telemetry, entitlements
-        │   ├── mysoldier.go        # Stats, Inventory, Packs, user settings, entitlements, 0x0801
-        │   ├── gamemanager.go      # server browser, matchmaking, join / create / destroy game
-        │   ├── host.go             # game host sessions
-        │   ├── peer.go             # peer-hosted game settings
-        │   ├── clientsession.go    # per-client session state
-        │   ├── conn.go             # connection tracking + push notifications
-        │   └── battlelog.go        # persona store used by the Battlelog API
-        │
+        ├── blaze/                  # Blaze packet header + TDF encoder / decoder
+        ├── components/             # Blaze components: Util, Auth, UserSessions, Stats,
+        │                           # Inventory, Packs, GameManager, host sessions, ...
         ├── server/
         │   ├── game.go             # game registry / state
         │   ├── types.go            # shared GameManager TDF types
-        │   ├── config.go           # game config (data/games.json)
-        │   ├── host.go             # QoS / host listeners + traffic capture
-        │   └── dedicated/          # headless dedicated server ("warsaw server")
-        │       ├── dedicated.go    # Blaze login, game registration, game port, player tracking
-        │       ├── blaze.go        # Blaze client
-        │       ├── types.go        # dedicated server TDF types
-        │       └── engine.go       # GameEngine interface + CaptureEngine (24-byte request decoding)
+        │   ├── config.go           # game config
+        │   ├── host.go             # QoS / ping site listeners
+        │   └── dedicated/          # Frostbite dedicated server  (NOT INCLUDED)
         │
-        ├── cmd/
-        │   └── bf4host/
-        │       └── main.go         # standalone dedicated server binary
-        │
+        ├── handshake/              # ProtoTunnel / CommUDP handshake helpers
+        ├── ebx/                    # EBX parsing (the EBX data itself is NOT INCLUDED)
         ├── network/
-        │   ├── certificates/
-        │   │   └── generate.bat
-        │   ├── redirector/
-        │   │   └── redirector.go   # GetServerInstance
-        │   ├── nucleus/
-        │   │   └── nucleus.go      # PS3 Nucleus HTTP login
-        │   └── battlelog/
-        │       └── battlelog.go    # Battlelog HTTP API
-        │
-        ├── psn/
-        │   └── xi5ticket.go        # PSN XI5 ticket parser
-        │
+        │   ├── certificates/       # generate.bat (certificate not included)
+        │   ├── redirector/         # GetServerInstance
+        │   ├── nucleus/            # PS3 Nucleus HTTP login
+        │   └── dns/                # optional built-in DNS
+        ├── psn/                    # PSN XI5 ticket parser
         ├── logger/
-        │   └── logger.go
+        ├── utilities/              # PreAuth / Ping / FetchClientConfig builders
+        ├── cmd/                    # side tools (bf4host, fetchcdn, ps3read, ...)
+        ├── tools/re/               # reverse-engineering helper scripts
+        ├── docs/                   # protocol notes
         │
-        ├── utilities/
-        │   └── utilities.go        # PreAuth / Ping / FetchClientConfig builders
-        │
-        └── data/
-            ├── games.json          # listed games
-            ├── items.txt           # inventory / unlocks
-            └── stats/              # stat groups (core, weapons, awards, dog tags, singleplayer, ...)
+        └── data/                   # runtime data + EBX data  (NOT INCLUDED)
 ```
 
 ---
@@ -345,31 +270,7 @@ Frostbite-3/
 go run .
 ```
 
-This starts the redirector, Blaze server, QoS listener, Nucleus, Battlelog API and (when `DedicatedServer = true`) a built-in dedicated server.
-
-### Standalone dedicated server
-
-The dedicated server can also run as its own process and log in to a remote emulator:
-
-```text
-go run ./cmd/bf4host -blaze 151.xxx.xxx.xx:33152 -ip 151.xxx.xxx.xx -port 25210 ^
-    -name "[DS] Siege of Shanghai - TDM" ^
-    -level Levels/MP/MP_Siege/MP_Siege -mode TeamDeathMatch0 -players 64
-```
-
-| Flag             | Default                         | Meaning                                         |
-| ---------------- | ------------------------------- | ----------------------------------------------- |
-| `-blaze`         | `0.0.0.0:33152`                 | Blaze address of the emulator                   |
-| `-ip` / `-port`  | `0.0.0.0` / `25210`             | Address players connect to                      |
-| `-name`          | `[DS] Siege of Shanghai - ...`  | Server name in the browser                      |
-| `-level`         | `Levels/MP/MP_Siege/MP_Siege`   | Level                                           |
-| `-mode`          | `TeamDeathMatch0`               | ConquestLarge0, Domination0, RushLarge0, ...    |
-| `-mod`           | `DEFAULT`                       | `DEFAULT`, `XPACK0`..`XPACK7`                   |
-| `-players`       | `64`                            | Player slots                                    |
-| `-version`       | `5900`                          | Game protocol version (the PS3's `GVER`)        |
-| `-join-timeout`  | `20s`                           | Time a joining player has to connect            |
-| `-captures`      | `data/captures`                 | Folder for game-port captures                   |
-| `-fake-connect`  | `false`                         | **Testing only** — mark players connected early |
+This starts the redirector, Blaze server, QoS listener and Nucleus. Remember that the dedicated game server and the `data/` folder (including the EBX data) are **not included** in this repo, so joining a multiplayer game will not work from this repository alone.
 
 ---
 
@@ -378,11 +279,10 @@ go run ./cmd/bf4host -blaze 151.xxx.xxx.xx:33152 -ip 151.xxx.xxx.xx -port 25210 
 Development relies on information from the original PS3 client:
 
 * `strings.txt` extracted from `EBOOT.ELF` (domains, URLs, component names, TDF tags, config keys)
-* Packet captures and game-port captures (`data/captures/`)
-* Server logs with raw hex of unknown commands
-* PS3 client behaviour (what it retries, where it times out)
-
-For the game protocol, the next step is static analysis of the EBOOT's network/crypto code.
+* Static analysis of the game's own client code (network, ghost and soldier readers)
+* RAM snapshots of the running PS3 (webMAN) while connected to our server
+* Server logs with raw hex of unknown commands and packets
+* Public EBX dumps of the map data
 
 ---
 
@@ -401,17 +301,23 @@ For the game protocol, the next step is static analysis of the EBOOT's network/c
 | Stats / Inventory / Packs / User settings     | ✅ Working          |
 | **Main menu**                                 | ✅ Working          |
 | **Test Range**                                | ✅ Playable         |
-| Server browser / game list                    | ✅ Working          |
+| Server browser / server info                  | ✅ Working          |
 | Matchmaking / JoinGame (Blaze side)           | ✅ Working          |
 | Dedicated server (Blaze side)                 | ✅ Working          |
-| Logging                                       | ✅ Working          |
-| Game-port traffic capture                     | ✅ Working          |
-| **Frostbite game protocol (24-byte handshake)** | 🔬 Reverse engineering |
-| Multiplayer matches                           | ⏳ Blocked on game protocol |
-| Battlelog API                                 | ⏳ Future          |
-| Game reporting / end-of-round stats           | ⏳ Future          |
-| Leaderboards                                  | ⏳ Future          |
-| Friends / Presence / Platoons                 | ⏳ Future          |
+| **Frostbite connection (ProtoTunnel / CommUDP)** | ✅ Working       |
+| Level loading (Siege of Shanghai, TDM)        | ✅ Working          |
+| Buildings and map objects                     | ✅ Working          |
+| Deploy screen and spawning                    | ✅ Working          |
+| Soldier entity and movement input             | ✅ Working          |
+| Weapon bundles / kit on the D-pad             | ✅ Working          |
+| First-person arms, weapon in hand, ammo       | 🔧 In progress      |
+| HUD health                                    | 🔧 In progress      |
+| Sound, redeploy                               | 🔧 In progress      |
+| Gameplay between players (shooting, damage, score) | ⏳ Future      |
+| Other maps and game modes                     | ⏳ Future           |
+| Game reporting / end-of-round stats           | ⏳ Future           |
+| Leaderboards                                  | ⏳ Future           |
+| Friends / Presence / Platoons                 | ⏳ Future           |
 | RPCN integration                              | ⏳ Future           |
 
 ---
@@ -428,13 +334,15 @@ For the game protocol, the next step is static analysis of the EBOOT's network/c
 8. ~~Test Range~~
 9. ~~Server browser, matchmaking and join flow~~
 10. ~~Dedicated server Blaze integration~~
-11. **Reverse engineer the 24-byte connection request and its encryption**
-12. **Implement the handshake reply so the PS3 connects to the dedicated server**
-13. Reverse engineer and write the in-game Frostbite protocol (from scratch)
-14. Playable multiplayer match
-15. Game reporting, stats updates and leaderboards
-16. Friends, presence, platoons
-17. RPCN integration
+11. ~~Reverse engineer the connection request and its encryption~~
+12. ~~Handshake reply: the PS3 connects to the dedicated server~~
+13. ~~Level loading, sub-level / bundle streaming, map objects~~
+14. ~~Deploy screen and spawning~~
+15. **First-person arms, weapons, ammo and HUD health**
+16. Gameplay between players: playable multiplayer match
+17. Game reporting, stats updates and leaderboards
+18. Friends, presence, platoons
+19. RPCN integration
 
 ---
 
@@ -470,6 +378,7 @@ If you are a representative of **Electronic Arts** or **DICE** and have any conc
 This project:
 
 * Contains **no EA or DICE code, assets or server software**
+* Does **not** include any game data (the EBX data and the `data/` folder are not in this repo)
 * Does **not** modify or redistribute the game executable
 * Does **not** bypass any purchase or ownership check, so players must own an original copy of Battlefield 4
 * Is **non-commercial** and will never be monetized
@@ -481,10 +390,9 @@ If you request it, I will cooperate fully, including making changes to the proje
 
 # Contributing
 
-Contributions are welcome — especially for the **Frostbite game protocol**:
+Contributions are welcome, especially for:
 
-* PS3 EBOOT reverse engineering (network / crypto code)
-* Captures of the 24-byte connection request
+* PS3 EBOOT reverse engineering (soldier, weapons, HUD)
 * Blaze protocol research
 * Game reporting / stats
 * RPCN research
@@ -521,8 +429,7 @@ No original EA server software is included. Only original source code written fo
 
 # Current Development Focus
 
-**The Blaze backend is largely done: the unmodified PS3 client logs in, reaches the menus, loads stats and unlocks, and can play the Test Range. Server browsing, matchmaking and joining work, and a headless dedicated server registers games on Blaze. The current focus is reverse engineering Frostbite's in-game UDP protocol, starting with the encrypted 24-byte connection request (counter +3 per retry, flag `0x80`, 22 encrypted bytes) so that real multiplayer matches can be played on a dedicated server written from scratch.**
+**The unmodified PS3 client logs in, reaches the menus, plays the Test Range, joins our Frostbite dedicated server, loads Siege of Shanghai with all buildings and spawns into the map with the HUD. The current focus is the soldier in first person: arms, weapon in hand, ammo and HUD health, followed by gameplay between players.**
 
 
 https://github.com/user-attachments/assets/02e658f0-022d-40aa-a046-c770474cb216
-
