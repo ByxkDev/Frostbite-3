@@ -47,6 +47,7 @@ type IpAddress struct {
 type IpPairAddress struct {
 	EXIP IpAddress `tdf:"EXIP"`
 	INIP IpAddress `tdf:"INIP"`
+	MACI uint64    `tdf:"MACI"`
 }
 
 type NetworkAddress struct {
@@ -62,8 +63,8 @@ func NewIpPairAddress(ip uint32, port uint16) NetworkAddress {
 }
 
 type HostInfo struct {
-	HPID uint64 `tdf:"HPID"` 
-	HSLT uint8  `tdf:"HSLT"` 
+	HPID uint64 `tdf:"HPID"`
+	HSLT uint8  `tdf:"HSLT"`
 }
 
 type NetworkQosData struct {
@@ -73,27 +74,27 @@ type NetworkQosData struct {
 }
 
 type ReplicatedGameData struct {
-	ADMN []uint64          `tdf:"ADMN"` 
+	ADMN []uint64          `tdf:"ADMN"`
 	ATTR map[string]string `tdf:"ATTR"`
-	CAP  []uint16          `tdf:"CAP"`  
+	CAP  []uint16          `tdf:"CAP"`
 	GID  uint32            `tdf:"GID"`
 	GNAM string            `tdf:"GNAM"`
 	GPVH uint64            `tdf:"GPVH"`
 	GSET uint32            `tdf:"GSET"`
-	GSID uint64            `tdf:"GSID"` 
+	GSID uint64            `tdf:"GSID"`
 	GSTA uint32            `tdf:"GSTA"`
 	GTYP string            `tdf:"GTYP"`
-	HNET []NetworkAddress  `tdf:"HNET"` 
+	HNET []NetworkAddress  `tdf:"HNET"`
 	HSES uint32            `tdf:"HSES"`
 	IGNO bool              `tdf:"IGNO"`
-	MCAP uint16            `tdf:"MCAP"` 
+	MCAP uint16            `tdf:"MCAP"`
 	NQOS NetworkQosData    `tdf:"NQOS"`
 	NRES bool              `tdf:"NRES"`
 	NTOP uint32            `tdf:"NTOP"`
 	PGID string            `tdf:"PGID"`
 	PHST HostInfo          `tdf:"PHST"`
 	PRES uint32            `tdf:"PRES"`
-	PSAS string            `tdf:"PSAS"` 
+	PSAS string            `tdf:"PSAS"`
 	QCAP uint16            `tdf:"QCAP"`
 	SEED uint32            `tdf:"SEED"`
 	TCAP uint16            `tdf:"TCAP"`
@@ -101,11 +102,11 @@ type ReplicatedGameData struct {
 	TIDS []uint16          `tdf:"TIDS"`
 	UUID string            `tdf:"UUID"`
 	VOIP uint32            `tdf:"VOIP"`
-	VSTR string            `tdf:"VSTR"` 
+	VSTR string            `tdf:"VSTR"`
 }
 
 type ReplicatedGamePlayer struct {
-	EXID uint64            `tdf:"EXID"` 
+	EXID uint64            `tdf:"EXID"`
 	GID  uint32            `tdf:"GID"`
 	LOC  uint32            `tdf:"LOC"`
 	NAME string            `tdf:"NAME"`
@@ -165,7 +166,7 @@ type GameBrowserGameData struct {
 	HNET []NetworkAddress        `tdf:"HNET"`
 	HOST uint64                  `tdf:"HOST"`
 	NTOP uint32                  `tdf:"NTOP"`
-	PCNT []uint16                `tdf:"PCNT"` 
+	PCNT []uint16                `tdf:"PCNT"`
 	PRES uint32                  `tdf:"PRES"`
 	PSAS string                  `tdf:"PSAS"`
 	QCAP uint16                  `tdf:"QCAP"`
@@ -258,7 +259,7 @@ type NotifyGameRemoved struct {
 }
 
 type GetFullGameDataRequest struct {
-	GIDL []uint32 `tdf:"GIDL"` 
+	GIDL []uint32 `tdf:"GIDL"`
 }
 
 type ListGameData struct {
@@ -271,27 +272,27 @@ type GetFullGameDataResponse struct {
 }
 
 type BF4HostInfo struct {
-	CSID uint32 `tdf:"CSID"` 
-	HPID uint64 `tdf:"HPID"` 
-	HSLT uint8  `tdf:"HSLT"` 
+	CSID uint32 `tdf:"CSID"`
+	HPID uint64 `tdf:"HPID"`
+	HSLT uint8  `tdf:"HSLT"`
 }
 
 type BF4GameData struct {
 	ADMN []uint64          `tdf:"ADMN"`
 	ATTR map[string]string `tdf:"ATTR"`
-	CAP  []uint16          `tdf:"CAP"` 
+	CAP  []uint16          `tdf:"CAP"`
 	COID string            `tdf:"COID"`
 	ESNM string            `tdf:"ESNM"`
 	GID  uint32            `tdf:"GID"`
-	GMRG uint32            `tdf:"GMRG"` 
+	GMRG uint32            `tdf:"GMRG"`
 	GNAM string            `tdf:"GNAM"`
 	GPVH uint64            `tdf:"GPVH"`
 	GSET uint32            `tdf:"GSET"`
 	GSID uint64            `tdf:"GSID"`
 	GSTA uint32            `tdf:"GSTA"`
-	GTYP string            `tdf:"GTYP"` 
+	GTYP string            `tdf:"GTYP"`
 	GURL string            `tdf:"GURL"`
-	HNET []NetworkAddress  `tdf:"HNET"` 
+	HNET []NetworkAddress  `tdf:"HNET"`
 	HSES uint32            `tdf:"HSES"`
 	IGNO bool              `tdf:"IGNO"`
 	MCAP uint16            `tdf:"MCAP"`
@@ -299,8 +300,8 @@ type BF4GameData struct {
 	NQOS NetworkQosData    `tdf:"NQOS"`
 	NRES bool              `tdf:"NRES"`
 	NTOP uint32            `tdf:"NTOP"`
-	PGID string            `tdf:"PGID"` 
-	PGSR []byte            `tdf:"PGSR"` 
+	PGID string            `tdf:"PGID"`
+	PGSR []byte            `tdf:"PGSR"`
 	PHST BF4HostInfo       `tdf:"PHST"`
 	PRES uint32            `tdf:"PRES"`
 	PSAS string            `tdf:"PSAS"`
@@ -316,7 +317,7 @@ type BF4GameData struct {
 
 type BF4Player struct {
 	BLOB []byte            `tdf:"BLOB"`
-	CONG uint64            `tdf:"CONG"` 
+	CONG uint64            `tdf:"CONG"`
 	CSID uint32            `tdf:"CSID"`
 	EXID uint64            `tdf:"EXID"`
 	GID  uint32            `tdf:"GID"`
@@ -398,8 +399,8 @@ type BF4CreateGameRequest struct {
 
 type UpdateMeshConnectionRequest struct {
 	GID  uint32              `tdf:"GID"`
-	STAT uint32              `tdf:"STAT"` 
-	TCG  blaze.BlazeObjectID `tdf:"TCG"`  
+	STAT uint32              `tdf:"STAT"`
+	TCG  blaze.BlazeObjectID `tdf:"TCG"`
 }
 
 type SetGameSettingsRequest struct {
