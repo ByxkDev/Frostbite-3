@@ -1,6 +1,7 @@
 package components
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 
 	"bf4/blaze"
 	"bf4/logger"
+	"bf4/server"
 )
 
 const (
@@ -16,7 +18,7 @@ const (
 	UserSessions     uint16 = 0x7802
 )
 
-var ServerHost = "0.0.0.0"
+var ServerHost = ""
 
 const tickerPort = 17502
 
@@ -114,14 +116,14 @@ type listEntitlementsRequest struct {
 type entitlement struct {
 	DEVI string `tdf:"DEVI"`
 	GDAY string `tdf:"GDAY"`
-	GNAM string `tdf:"GNAM"` 
+	GNAM string `tdf:"GNAM"`
 	ID   uint64 `tdf:"ID"`
 	ISCO uint64 `tdf:"ISCO"`
 	PID  uint64 `tdf:"PID"`
 	PJID string `tdf:"PJID"`
 	PRCA uint64 `tdf:"PRCA"`
-	PRID string `tdf:"PRID"` 
-	STAT uint64 `tdf:"STAT"` 
+	PRID string `tdf:"PRID"`
+	STAT uint64 `tdf:"STAT"`
 	STRC uint64 `tdf:"STRC"`
 	TAG  string `tdf:"TAG"`
 	TDAY string `tdf:"TDAY"`
@@ -188,6 +190,8 @@ type ipAddress struct {
 type ipPairAddress struct {
 	EXIP ipAddress `tdf:"EXIP"`
 	INIP ipAddress `tdf:"INIP"`
+
+	MACI uint64 `tdf:"MACI"`
 }
 
 type updateNetworkInfoRequest struct {
@@ -219,7 +223,7 @@ func handleUserSessionsUpdateNetworkInfo(p blaze.Packet) []byte {
 	userStateMu.Unlock()
 
 	personaID := currentPersonaID()
-	logger.Info("USERSESSIONS: UpdateNetworkInfo INIP=%s:%d EXIP=%s:%d", ipString(pair.INIP.IP), pair.INIP.PORT, ipString(pair.EXIP.IP), pair.EXIP.PORT)
+	logger.Info("USERSESSIONS: UpdateNetworkInfo INIP=%s:%d EXIP=%s:%d MACI=0x%08x", ipString(pair.INIP.IP), pair.INIP.PORT, ipString(pair.EXIP.IP), pair.EXIP.PORT, pair.MACI)
 
 	reply := encodeBlazePacket(p.Component, p.Command, 0, blazeTypeReply, uint32(p.MessageId), nil)
 
@@ -253,8 +257,8 @@ type setUserInfoAttributeRequest struct {
 
 var (
 	userStateMu   sync.Mutex
-	lastAddress   *ipPairAddress 
-	userAttrValue uint64         = userAttributes
+	lastAddress   *ipPairAddress
+	userAttrValue uint64 = userAttributes
 )
 
 func currentUserAttributes() uint64 {
@@ -374,7 +378,224 @@ func handleUserSessionsResumeSession(p blaze.Packet) []byte {
 	return encodeBlazePacket(p.Component, p.Command, userSessionsErrSessionNotFound, 0x3000, uint32(p.MessageId), nil)
 }
 
-const userSessionsErrSessionNotFound uint16 = 0x0001
+const (
+	userSessionsErrSessionNotFound uint16 = 0x0001
+	userSessionsErrUserNotFound    uint16 = 0x0001
+
+	userDataFlagsOnline uint64 = 3
+	tdfTypeList         byte   = 0x04
+)
+
+type knownUser struct {
+	name string
+	exti uint64
+}
+
+var (
+	knownUsersMu sync.RWMutex
+	knownUsers   = map[uint64]knownUser{}
+)
+
+func rememberUser(id uint64, name string, exti uint64) {
+	if id == 0 || name == "" {
+		return
+	}
+	knownUsersMu.Lock()
+	defer knownUsersMu.Unlock()
+	if old, ok := knownUsers[id]; ok && exti == 0 {
+		exti = old.exti
+	}
+	knownUsers[id] = knownUser{name: name, exti: exti}
+}
+
+func knownUserByExti(exti uint64) uint64 {
+	knownUsersMu.RLock()
+	defer knownUsersMu.RUnlock()
+	for id, u := range knownUsers {
+		if u.exti == exti {
+			return id
+		}
+	}
+	return 0
+}
+
+func userByID(id uint64) (knownUser, bool) {
+	knownUsersMu.RLock()
+	u, ok := knownUsers[id]
+	knownUsersMu.RUnlock()
+	if ok {
+		return u, true
+	}
+	if id == currentPersonaID() {
+		if name := GetConsoleOnlineID(); name != "" {
+			return knownUser{name: name, exti: GetConsoleExti()}, true
+		}
+	}
+	for _, g := range server.Games.List() {
+		if uint64(g.HostPersona()) == id {
+			if name := g.HostDisplayName(); name != "" {
+				return knownUser{name: name}, true
+			}
+		}
+	}
+	return knownUser{}, false
+}
+
+type lookupUserIdent struct {
+	AID  uint64 `tdf:"AID"`
+	ALOC uint64 `tdf:"ALOC"`
+	EXBB []byte `tdf:"EXBB"`
+	EXID uint64 `tdf:"EXID"`
+	ID   uint64 `tdf:"ID"`
+	NAME string `tdf:"NAME"`
+	ORIG uint64 `tdf:"ORIG"`
+	PIDI uint64 `tdf:"PIDI"`
+}
+
+type lookupUsersRequest struct {
+	LTYP uint64            `tdf:"LTYP"`
+	ULST []lookupUserIdent `tdf:"ULST"`
+}
+
+type userDataTail struct {
+	FLGS uint64          `tdf:"FLGS"`
+	USER lookupUserIdent `tdf:"USER"`
+}
+
+func resolveLookupUser(u lookupUserIdent) (uint64, knownUser, bool) {
+	var id uint64
+	switch {
+	case u.ID != 0:
+		id = u.ID
+	case u.NAME != "":
+		id = personaIDFromOnlineID(u.NAME)
+	case u.EXID != 0:
+		id = knownUserByExti(u.EXID)
+	case u.AID != 0:
+		id = u.AID
+	case u.PIDI != 0:
+		id = u.PIDI
+	}
+	if id == 0 {
+		return 0, knownUser{}, false
+	}
+	if ku, ok := userByID(id); ok {
+		return id, ku, true
+	}
+	if u.NAME != "" && personaIDFromOnlineID(u.NAME) == id {
+		return id, knownUser{name: u.NAME, exti: u.EXID}, true
+	}
+	return id, knownUser{}, false
+}
+
+func userAddressUnion(id uint64) networkAddressUnion {
+	addr := networkAddressUnion{Union: blaze.Union{ActiveMember: blaze.UnionUnsetMember}}
+	if id != currentPersonaID() {
+		return addr
+	}
+	userStateMu.Lock()
+	defer userStateMu.Unlock()
+	if lastAddress != nil {
+		pair := *lastAddress
+		if err := blaze.UnionSetValue(&addr, &pair); err != nil {
+			logger.Error("USERSESSIONS: lookup set ADDR union failed: %v", err)
+		}
+	}
+	return addr
+}
+
+func encodeUserData(id uint64, ku knownUser) ([]byte, error) {
+	edat, err := encodeUserExtendedData(userAddressUnion(id), id)
+	if err != nil {
+		return nil, err
+	}
+	edatTag := blaze.MustTdfMember("EDAT")
+	copy(edat[:3], edatTag.Bytes[:])
+
+	tail, err := component35TdfEncoder.Encode(&userDataTail{
+		FLGS: userDataFlagsOnline,
+		USER: lookupUserIdent{
+			AID:  id,
+			ALOC: localeEnUS,
+			EXBB: []byte{},
+			EXID: ku.exti,
+			ID:   id,
+			NAME: ku.name,
+			ORIG: id,
+			PIDI: id,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return append(edat, tail...), nil
+}
+
+func handleUserSessionsLookupUsers(p blaze.Packet) []byte {
+	var req lookupUsersRequest
+	if err := component35TdfDecoder.Decode(p.Payload, &req); err != nil {
+		logger.Warn("USERSESSIONS: lookupUsers decode failed: %v", err)
+	}
+
+	var elems bytes.Buffer
+	n := 0
+	for _, u := range req.ULST {
+		id, ku, ok := resolveLookupUser(u)
+		if !ok {
+			logger.Warn("USERSESSIONS: lookupUsers unknown user ID=%d NAME=%q EXID=%d", u.ID, u.NAME, u.EXID)
+			continue
+		}
+		data, err := encodeUserData(id, ku)
+		if err != nil {
+			logger.Error("USERSESSIONS: lookupUsers encode %d failed: %v", id, err)
+			continue
+		}
+		elems.Write(data)
+		elems.WriteByte(0x00)
+		n++
+	}
+
+	var payload bytes.Buffer
+	ulst := blaze.MustTdfMember("ULST")
+	payload.Write(ulst.Bytes[:])
+	payload.WriteByte(tdfTypeList)
+	payload.WriteByte(byte(blaze.TdfTypeStruct))
+	payload.Write(tdfVarint(uint64(n)))
+	payload.Write(elems.Bytes())
+
+	return encodeBlazePacket(p.Component, p.Command, 0, blazeTypeReply, uint32(p.MessageId), payload.Bytes())
+}
+
+func handleUserSessionsLookupUser(p blaze.Packet) []byte {
+	var req lookupUserIdent
+	if err := component35TdfDecoder.Decode(p.Payload, &req); err != nil {
+		logger.Warn("USERSESSIONS: lookupUser decode failed: %v", err)
+	}
+
+	id, ku, ok := resolveLookupUser(req)
+	if !ok {
+		logger.Warn("USERSESSIONS: lookupUser unknown user ID=%d NAME=%q EXID=%d", req.ID, req.NAME, req.EXID)
+		return encodeBlazePacket(p.Component, p.Command, userSessionsErrUserNotFound, 0x3000, uint32(p.MessageId), nil)
+	}
+
+	data, err := encodeUserData(id, ku)
+	if err != nil {
+		logger.Error("USERSESSIONS: lookupUser encode %d failed: %v", id, err)
+		return nil
+	}
+	return encodeBlazePacket(p.Component, p.Command, 0, blazeTypeReply, uint32(p.MessageId), data)
+}
+
+func tdfVarint(v uint64) []byte {
+	b := []byte{byte(v & 0x3F)}
+	v >>= 6
+	for v > 0 {
+		b[len(b)-1] |= 0x80
+		b = append(b, byte(v&0x7F))
+		v >>= 7
+	}
+	return b
+}
 
 func HandleUserSessions(p blaze.Packet) []byte {
 	switch p.Command {
@@ -384,6 +605,10 @@ func HandleUserSessions(p blaze.Packet) []byte {
 		return handleUserSessionsUpdateNetworkInfo(p)
 	case 0x001A:
 		return handleUserSessionsSetUserInfoAttribute(p)
+	case 0x000C:
+		return handleUserSessionsLookupUser(p)
+	case 0x000D:
+		return handleUserSessionsLookupUsers(p)
 	default:
 		logger.Warn("USERSESSIONS: unknown command %d (0x%04X)", p.Command, p.Command)
 		logger.Hex(logger.LevelWarn, "USERSESSIONS RAW", p.Payload)
@@ -391,7 +616,7 @@ func HandleUserSessions(p blaze.Packet) []byte {
 	}
 }
 
-func encodeReply(p blaze.Packet, obj interface{}, name string) []byte {
+func encodeReply(p blaze.Packet, obj any, name string) []byte {
 	payload, err := component35TdfEncoder.Encode(obj)
 	if err != nil {
 		logger.Error("BLAZE: %s encode failed: %v", name, err)
