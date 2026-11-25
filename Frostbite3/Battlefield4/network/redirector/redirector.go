@@ -2,7 +2,6 @@ package redirector
 
 import (
 	"bf4/blaze"
-	"bf4/logger"
 )
 
 const (
@@ -11,8 +10,8 @@ const (
 )
 
 const (
-	GameServerIP          = "0.0.0.0"
-	GameServerHost        = "0.0.0.0"
+	GameServerIP          = ""
+	GameServerHost        = ""
 	GameServerPort uint32 = 33152
 )
 
@@ -41,13 +40,6 @@ type serverInstanceInfo struct {
 }
 
 func BuildGetServerInstanceResponse(messageID uint32, clientType string) []byte {
-	logger.Info("REDIRECTOR: building GetServerInstance response (MessageId=%d)", messageID)
-	logger.Debug("REDIRECTOR: Client Type: %q", clientType)
-	logger.Debug("REDIRECTOR: Message ID: %d", messageID)
-	logger.Debug("REDIRECTOR: Server IP: %s", GameServerIP)
-	logger.Debug("REDIRECTOR: Server Port: %d", GameServerPort)
-	logger.Debug("REDIRECTOR: Secure: false")
-
 	response := serverInstanceInfo{
 		Addr: networkAddress{
 			Valu: &serverAddress{
@@ -58,7 +50,7 @@ func BuildGetServerInstanceResponse(messageID uint32, clientType string) []byte 
 		},
 		Amap: []emptyStruct{},
 		Msgs: []string{
-			"Hello World!",
+			"Welcome To Syntax",
 			"@Byxk",
 		},
 		Nmap: []emptyStruct{},
@@ -68,16 +60,9 @@ func BuildGetServerInstanceResponse(messageID uint32, clientType string) []byte 
 
 	payload, err := encoder.Encode(&response)
 	if err != nil {
-		logger.Warn("REDIRECTOR: GetServerInstance encode failed: %v", err)
 		return nil
 	}
 
-	logger.Hex(logger.LevelDebug, "REDIRECTOR GetServerInstance payload", payload)
-
 	packet := blaze.EncodePacket(RedirectorComponent, GetServerInstance, blaze.PacketTypeResponse, messageID, payload)
-
-	logger.Response(packet)
-	logger.Info("REDIRECTOR: response ready (%d bytes)", len(packet))
-
 	return packet
 }
