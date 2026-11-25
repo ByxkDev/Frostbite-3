@@ -1,6 +1,10 @@
 package components
 
 import (
+	"bytes"
+	"fmt"
+	"hash/fnv"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,13 +20,13 @@ const (
 
 	notifyGameListUpdate uint16 = 0x00C9
 
-	notifyMatchmakingFailed uint16 = 0x000A 
-	notifyGameRemoved       uint16 = 0x0010 
-	notifyGameSetup         uint16 = 0x0014 
-	notifyPlayerJoining     uint16 = 0x0015 
-	notifyPlayerRemoved     uint16 = 0x0028 
-	notifyGameStateChange   uint16 = 0x0064 
-	gameListMaxFitScore = 0x5460
+	notifyMatchmakingFailed uint16 = 0x000A
+	notifyGameRemoved       uint16 = 0x0010
+	notifyGameSetup         uint16 = 0x0014
+	notifyPlayerJoining     uint16 = 0x0015
+	notifyPlayerRemoved     uint16 = 0x0028
+	notifyGameStateChange   uint16 = 0x0064
+	gameListMaxFitScore            = 0x5460
 )
 
 var nextGameListID uint32
@@ -32,7 +36,7 @@ var (
 	gmTdfDecoder = component35TdfFactory.CreateDecoder(true)
 )
 
-func gmReply(p blaze.Packet, obj interface{}, name string) []byte {
+func gmReply(p blaze.Packet, obj any, name string) []byte {
 	payload, err := gmTdfEncoder.Encode(obj)
 	if err != nil {
 		logger.Error("BLAZE: %s encode failed: %v", name, err)
@@ -44,22 +48,22 @@ func gmReply(p blaze.Packet, obj interface{}, name string) []byte {
 }
 
 type getGameListRequest struct {
-	DNAM string `tdf:"DNAM"` 
+	DNAM string `tdf:"DNAM"`
 	GVER string `tdf:"GVER"`
-	LCAP uint32 `tdf:"LCAP"` 
+	LCAP uint32 `tdf:"LCAP"`
 }
 
 type getGameListResponse struct {
 	GLID uint32 `tdf:"GLID"`
-	MAXF uint32 `tdf:"MAXF"` 
-	NGD  uint32 `tdf:"NGD"`  
+	MAXF uint32 `tdf:"MAXF"`
+	NGD  uint32 `tdf:"NGD"`
 }
 
 type gameListUpdate struct {
-	DONE bool                          `tdf:"DONE"` 
+	DONE bool                          `tdf:"DONE"`
 	GLID uint32                        `tdf:"GLID"`
 	REMV []uint64                      `tdf:"REMV"`
-	UPDT []server.GameBrowserMatchData `tdf:"UPDT"` 
+	UPDT []server.GameBrowserMatchData `tdf:"UPDT"`
 }
 
 type destroyGameListRequest struct {
@@ -97,6 +101,7 @@ func browserGames() []server.GameBrowserMatchData {
 	if out == nil {
 		out = []server.GameBrowserMatchData{}
 	}
+	patchGameData(reflect.ValueOf(out), 0)
 	return out
 }
 
@@ -116,26 +121,30 @@ func HandleGameManager(p blaze.Packet) []byte {
 		return handleJoinGame(p)
 	case 0x000B:
 		return handleRemovePlayer(p)
-	case 0x001D: 
+	case 0x0016:
+		return handleLeaveGameByGroup(p)
+	case 0x0019:
+		return handleCreateOrJoinGame(p)
+	case 0x001D:
 		return handleClientUpdateMeshConnection(p)
-	case 0x000D: 
+	case 0x000D:
 		return handleStartMatchmaking(p)
 	case 0x000E:
 		return handleCancelMatchmaking(p)
 	case 0x000F:
 		return handleClientFinalizeGameCreation(p)
-	case 0x0064, 0x0065: 
+	case 0x0064, 0x0065:
 		return handleGetGameList(p)
 	case 0x0066:
 		var req destroyGameListRequest
 		_ = gmTdfDecoder.Decode(p.Payload, &req)
 		logger.Info("GAMEMANAGER: destroyGameList GLID=%d", req.GLID)
 		return emptyReply(p)
-	case 0x0067: 
+	case 0x0067:
 		return handleGetFullGameData(p)
-	case 0x0069: 
+	case 0x0069:
 		return handleGetGameDataFromID(p)
-	case 0x0071: 
+	case 0x0071:
 		logger.Info("GAMEMANAGER: command 0x71 (game data by user) -> empty GDAT")
 		return gmReply(p, &gameBrowserDataList{GDAT: []server.GameBrowserGameData{}}, "GameManager 0x71")
 	default:
@@ -149,7 +158,7 @@ func emptyReply(p blaze.Packet) []byte {
 	return encodeBlazePacket(p.Component, p.Command, 0, blazeTypeReply, uint32(p.MessageId), nil)
 }
 
-func gmNotify(cmd uint16, obj interface{}) []byte {
+func gmNotify(cmd uint16, obj any) []byte {
 	payload, err := gmTdfEncoder.Encode(obj)
 	if err != nil {
 		logger.Error("GAMEMANAGER: encode notification 0x%04X failed: %v", cmd, err)
@@ -230,16 +239,16 @@ func currentPush() func(b []byte) error {
 func CurrentPersonaID() uint64 { return currentPersonaID() }
 
 const (
-	mmResultTimedOut = 3 
-	mmResultCanceled = 4 
+	mmResultTimedOut = 3
+	mmResultCanceled = 4
 )
 
 type startMatchmakingRequest struct {
-	ATTR map[string]string `tdf:"ATTR"` 
-	DUR  uint32            `tdf:"DUR"` 
-	GSET uint32            `tdf:"GSET"` 
+	ATTR map[string]string `tdf:"ATTR"`
+	DUR  uint32            `tdf:"DUR"`
+	GSET uint32            `tdf:"GSET"`
 	MODE uint32            `tdf:"MODE"`
-	PMAX uint16            `tdf:"PMAX"` 
+	PMAX uint16            `tdf:"PMAX"`
 }
 
 type startMatchmakingResponse struct {
@@ -261,6 +270,7 @@ var (
 	nextMatchmakingID uint32
 	mmMu              sync.Mutex
 	mmTimers          = map[uint32]*time.Timer{}
+	mmPeerPending     = map[uint64]uint32{}
 )
 
 func matchmakingFailed(msid uint32, result uint32, usid uint64) []byte {
@@ -295,6 +305,9 @@ func handleStartMatchmaking(p blaze.Packet) []byte {
 	}
 
 	if PeerHostedMatchmaking {
+		mmMu.Lock()
+		mmPeerPending[currentPersonaID()] = msid
+		mmMu.Unlock()
 		return handlePeerMatchmaking(p, msid, reply)
 	}
 
@@ -357,6 +370,9 @@ func handleCancelMatchmaking(p blaze.Packet) []byte {
 		t.Stop()
 		delete(mmTimers, req.MSID)
 	}
+	if mmPeerPending[currentPersonaID()] == req.MSID {
+		delete(mmPeerPending, currentPersonaID())
+	}
 	mmMu.Unlock()
 
 	logger.Info("GAMEMANAGER: cancelMatchmaking MSID=%d", req.MSID)
@@ -375,6 +391,7 @@ func currentPlayerInfo() server.PlayerInfo {
 		info.Address = server.IpPairAddress{
 			EXIP: server.IpAddress{IP: lastAddress.EXIP.IP, PORT: lastAddress.EXIP.PORT},
 			INIP: server.IpAddress{IP: lastAddress.INIP.IP, PORT: lastAddress.INIP.PORT},
+			MACI: lastAddress.MACI,
 		}
 	}
 	userStateMu.Unlock()
@@ -441,6 +458,72 @@ func handleRemovePlayer(p blaze.Packet) []byte {
 	})...)
 }
 
+type leaveGameByGroupRequest struct {
+	BTPL blaze.BlazeObjectID `tdf:"BTPL"`
+	CNTX uint64              `tdf:"CNTX"`
+	GID  uint32              `tdf:"GID"`
+	PID  uint64              `tdf:"PID"`
+	REAS uint32              `tdf:"REAS"`
+	SCTX string              `tdf:"SCTX"`
+}
+
+type removePlayerForward struct {
+	GID  uint32 `tdf:"GID"`
+	PID  uint64 `tdf:"PID"`
+	REAS uint32 `tdf:"REAS"`
+}
+
+func handleLeaveGameByGroup(p blaze.Packet) []byte {
+	var req leaveGameByGroupRequest
+	if err := gmTdfDecoder.Decode(p.Payload, &req); err != nil {
+		logger.Debug("GAMEMANAGER: leaveGameByGroup decode stopped early: %v", err)
+	}
+	if req.PID == 0 {
+		req.PID = currentPersonaID()
+	}
+
+	fwd := p
+	if req.GID != 0 {
+		payload, err := gmTdfEncoder.Encode(&removePlayerForward{GID: req.GID, PID: req.PID, REAS: req.REAS})
+		if err != nil {
+			logger.Error("GAMEMANAGER: leaveGameByGroup re-encode failed: %v", err)
+		} else {
+			fwd.Payload = payload
+		}
+	}
+	return handleRemovePlayer(fwd)
+}
+
+type createOrJoinGameRequest struct {
+	ATTR map[string]string `tdf:"ATTR"`
+}
+
+type joinGameForward struct {
+	GID uint32 `tdf:"GID"`
+}
+
+func handleCreateOrJoinGame(p blaze.Packet) []byte {
+	var req createOrJoinGameRequest
+	if err := gmTdfDecoder.Decode(p.Payload, &req); err != nil {
+		logger.Debug("GAMEMANAGER: createOrJoinGame decode stopped early: %v", err)
+	}
+
+	g, ok := server.Games.FindMatch(req.ATTR["level"], req.ATTR["mode"])
+	if !ok {
+		logger.Warn("GAMEMANAGER: createOrJoinGame %v -> no game to join", req.ATTR)
+		return encodeBlazePacket(p.Component, p.Command, gmErrGameNotFound, 0x3000, uint32(p.MessageId), nil)
+	}
+
+	payload, err := gmTdfEncoder.Encode(&joinGameForward{GID: uint32(g.ID)})
+	if err != nil {
+		logger.Error("GAMEMANAGER: createOrJoinGame re-encode failed: %v", err)
+		return nil
+	}
+	fwd := p
+	fwd.Payload = payload
+	return handleJoinGame(fwd)
+}
+
 func handleGetGameDataFromID(p blaze.Packet) []byte {
 	var req server.GetGameDataFromIDRequest
 	if err := gmTdfDecoder.Decode(p.Payload, &req); err != nil {
@@ -452,6 +535,7 @@ func handleGetGameDataFromID(p blaze.Packet) []byte {
 			resp.GDAT = append(resp.GDAT, server.Games.BrowserData(g))
 		}
 	}
+	patchGameData(reflect.ValueOf(&resp).Elem(), 0)
 	logger.Info("GAMEMANAGER: getGameDataFromId %v -> %d games", req.GIDS, len(resp.GDAT))
 	return gmReply(p, &resp, "GameManager getGameDataFromId")
 }
@@ -475,11 +559,245 @@ func handleCreateGame(p blaze.Packet) []byte {
 	userStateMu.Unlock()
 
 	g := server.Games.CreateFromRequest(req, currentPersonaID(), fallbackIP, fallbackPort)
+	if g.MaxPlayers == 0 {
+		if n := createGameCapacity(p.Payload); n > 0 {
+			setNumber(&g.MaxPlayers, n)
+			logger.Debug("GAMEMANAGER: createGame GID=%d capacity restored from raw payload: %d", g.ID, n)
+		}
+	}
+	rememberGameExtras(uint64(g.ID), g.Name, p.Payload)
 	logger.Info("GAMEMANAGER: createGame -> GID=%d %q level=%q mode=%q max=%d host=%d",
 		g.ID, g.Name, g.Level, g.Mode, g.MaxPlayers, g.HostID)
 
 	reply := gmReply(p, &server.CreateGameResponse{GID: g.ID}, "GameManager createGame")
 	return append(reply, gameSetupNotify(g, datalessReason(server.SetupCreateGame))...)
+}
+
+func createGameCapacity(payload []byte) uint64 {
+	pmax := blaze.MustTdfMember("PMAX")
+	if i := bytes.Index(payload, append(pmax.Bytes[:], 0x00)); i >= 0 {
+		if v, n := tdfReadVarint(payload[i+4:]); n > 0 && v > 0 {
+			return v
+		}
+	}
+
+	pcap := blaze.MustTdfMember("PCAP")
+	if i := bytes.Index(payload, append(pcap.Bytes[:], tdfTypeList, 0x00)); i >= 0 {
+		rest := payload[i+5:]
+		count, n := tdfReadVarint(rest)
+		if n > 0 && count > 0 {
+			if v, m := tdfReadVarint(rest[n:]); m > 0 {
+				return v
+			}
+		}
+	}
+	return 0
+}
+
+func tdfReadVarint(b []byte) (uint64, int) {
+	if len(b) == 0 {
+		return 0, 0
+	}
+	v := uint64(b[0] & 0x3F)
+	shift := uint(6)
+	i := 0
+	for b[i]&0x80 != 0 {
+		i++
+		if i >= len(b) {
+			return 0, 0
+		}
+		v |= uint64(b[i]&0x7F) << shift
+		shift += 7
+	}
+	return v, i + 1
+}
+
+func setNumber(field any, n uint64) {
+	v := reflect.ValueOf(field)
+	if v.Kind() != reflect.Ptr || v.IsNil() {
+		return
+	}
+	e := v.Elem()
+	switch e.Kind() {
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		e.SetUint(n)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		e.SetInt(int64(n))
+	}
+}
+
+type gameExtras struct {
+	pcap  []uint64
+	pmax  uint64
+	attrs map[string]string
+	pgid  string
+}
+
+type createGameAttrs struct {
+	ATTR map[string]string `tdf:"ATTR"`
+}
+
+var (
+	gameExtrasMu sync.Mutex
+	gameExtrasBy = map[uint64]*gameExtras{}
+)
+
+func rememberGameExtras(gid uint64, name string, payload []byte) {
+	var a createGameAttrs
+	_ = gmTdfDecoder.Decode(payload, &a)
+
+	ex := &gameExtras{
+		pcap:  createGameSlotCaps(payload),
+		pmax:  createGameCapacity(payload),
+		attrs: a.ATTR,
+		pgid:  persistedGameID(name),
+	}
+	if len(ex.pcap) == 0 && ex.pmax > 0 {
+		ex.pcap = []uint64{ex.pmax, 0, 0, 0}
+	}
+
+	gameExtrasMu.Lock()
+	gameExtrasBy[gid] = ex
+	gameExtrasMu.Unlock()
+}
+
+func lookupGameExtras(gid uint64) *gameExtras {
+	gameExtrasMu.Lock()
+	defer gameExtrasMu.Unlock()
+	return gameExtrasBy[gid]
+}
+
+func persistedGameID(name string) string {
+	h := fnv.New64a()
+	h.Write([]byte(name))
+	return fmt.Sprintf("bf4ps3-%016x", h.Sum64())
+}
+
+func createGameSlotCaps(payload []byte) []uint64 {
+	pcap := blaze.MustTdfMember("PCAP")
+	i := bytes.Index(payload, append(pcap.Bytes[:], tdfTypeList, 0x00))
+	if i < 0 {
+		return nil
+	}
+	rest := payload[i+5:]
+	count, n := tdfReadVarint(rest)
+	if n == 0 || count == 0 || count > 8 {
+		return nil
+	}
+	rest = rest[n:]
+	caps := make([]uint64, 0, count)
+	for k := uint64(0); k < count; k++ {
+		v, m := tdfReadVarint(rest)
+		if m == 0 {
+			return nil
+		}
+		caps = append(caps, v)
+		rest = rest[m:]
+	}
+	return caps
+}
+
+func patchGameData(v reflect.Value, gid uint64) {
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Interface:
+		if !v.IsNil() {
+			patchGameData(v.Elem(), gid)
+		}
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < v.Len(); i++ {
+			e := v.Index(i)
+			switch e.Kind() {
+			case reflect.Struct, reflect.Ptr, reflect.Interface, reflect.Slice:
+				patchGameData(e, gid)
+			}
+		}
+	case reflect.Struct:
+		t := v.Type()
+		for i := 0; i < t.NumField(); i++ {
+			if t.Field(i).Tag.Get("tdf") == "GID" {
+				if id, ok := readNumber(v.Field(i)); ok && id != 0 {
+					gid = id
+				}
+			}
+		}
+		ex := lookupGameExtras(gid)
+		for i := 0; i < t.NumField(); i++ {
+			f := v.Field(i)
+			if !f.CanSet() {
+				continue
+			}
+			if ex != nil {
+				switch t.Field(i).Tag.Get("tdf") {
+				case "PCAP":
+					if f.Kind() == reflect.Slice && sliceIsZero(f) && len(ex.pcap) > 0 {
+						setNumberSlice(f, ex.pcap)
+					}
+				case "PMAX":
+					if n, ok := readNumber(f); ok && n == 0 && ex.pmax > 0 {
+						setNumber(f.Addr().Interface(), ex.pmax)
+					}
+				case "ATTR":
+					mergeStringMap(f, ex.attrs)
+				case "PGID":
+					if f.Kind() == reflect.String && f.String() == "" {
+						f.SetString(ex.pgid)
+					}
+				}
+			}
+			switch f.Kind() {
+			case reflect.Struct, reflect.Ptr, reflect.Interface, reflect.Slice, reflect.Array:
+				patchGameData(f, gid)
+			}
+		}
+	}
+}
+
+func readNumber(f reflect.Value) (uint64, bool) {
+	switch f.Kind() {
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return f.Uint(), true
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return uint64(f.Int()), true
+	}
+	return 0, false
+}
+
+func sliceIsZero(f reflect.Value) bool {
+	for i := 0; i < f.Len(); i++ {
+		if n, ok := readNumber(f.Index(i)); !ok || n != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func setNumberSlice(f reflect.Value, vals []uint64) {
+	s := reflect.MakeSlice(f.Type(), len(vals), len(vals))
+	for i, n := range vals {
+		setNumber(s.Index(i).Addr().Interface(), n)
+	}
+	f.Set(s)
+}
+
+func mergeStringMap(f reflect.Value, extra map[string]string) {
+	if len(extra) == 0 || f.Kind() != reflect.Map ||
+		f.Type().Key().Kind() != reflect.String || f.Type().Elem().Kind() != reflect.String {
+		return
+	}
+	m := reflect.MakeMap(f.Type())
+	if !f.IsNil() {
+		iter := f.MapRange()
+		for iter.Next() {
+			m.SetMapIndex(iter.Key(), iter.Value())
+		}
+	}
+	for k, val := range extra {
+		key := reflect.ValueOf(k).Convert(f.Type().Key())
+		if !m.MapIndex(key).IsValid() {
+			m.SetMapIndex(key, reflect.ValueOf(val).Convert(f.Type().Elem()))
+		}
+	}
+	f.Set(m)
 }
 
 func handleAdvanceGameState(p blaze.Packet) []byte {
@@ -525,7 +843,19 @@ func handleDestroyGame(p blaze.Packet) []byte {
 		}
 	}
 	reply := gmReply(p, &server.CreateGameResponse{GID: req.GID}, "GameManager destroyGame")
-	return append(reply, gmNotify(notifyGameRemoved, &server.NotifyGameRemoved{GID: req.GID})...)
+	reply = append(reply, gmNotify(notifyGameRemoved, &server.NotifyGameRemoved{GID: req.GID})...)
+
+	me := currentPersonaID()
+	mmMu.Lock()
+	msid, pending := mmPeerPending[me]
+	delete(mmPeerPending, me)
+	mmMu.Unlock()
+	if pending {
+		logger.Warn("GAMEMANAGER: %q destroyed peer game %d right after matchmaking MSID=%d -> console refused to host, ending matchmaking",
+			GetConsoleOnlineID(), req.GID, msid)
+		reply = append(reply, matchmakingFailed(msid, mmResultTimedOut, me)...)
+	}
+	return reply
 }
 
 func handleGetFullGameData(p blaze.Packet) []byte {
@@ -547,6 +877,7 @@ func handleGetFullGameData(p blaze.Packet) []byte {
 		})
 	}
 
+	patchGameData(reflect.ValueOf(&resp).Elem(), 0)
 	logger.Info("GAMEMANAGER: getFullGameData %v -> %d games", req.GIDL, len(resp.LGAM))
 	return gmReply(p, &resp, "GameManager getFullGameData")
 }
@@ -555,6 +886,9 @@ const setupJoinByBrowsing uint32 = 3
 
 func bf4JoinSequence(p blaze.Packet, g *server.Game, player server.Player, reason server.GameSetupReason, platformHostAsReply bool) []byte {
 	hostID, hostName := g.HostPersona(), g.HostDisplayName()
+
+	rememberUser(uint64(hostID), hostName, 0)
+	rememberUser(uint64(player.PersonaID), player.Name, 0)
 
 	var out []byte
 
@@ -579,6 +913,8 @@ func bf4JoinSequence(p blaze.Packet, g *server.Game, player server.Player, reaso
 
 	logger.Info("GAMEMANAGER: join sequence for %q -> game %d, host %q (%d) at %s:%d",
 		player.Name, g.ID, hostName, hostID, ipString(g.HostIP), g.HostPort)
+
+	logger.HexDump(logger.LevelDebug, "GAMEMANAGER join sequence to client", out)
 
 	notifyHostOfJoin(g, player)
 	notifyPlayersOfJoin(g, player)
@@ -617,7 +953,7 @@ func notifyHostOfJoin(g *server.Game, player server.Player) {
 	b = append(b, hostNotify(UserSessions, 0x0005, &userUpdatedNotify{FLGS: 3, ID: player.PersonaID})...)
 	b = append(b, gmNotify(notifyPlayerJoining, &server.NotifyPlayerJoiningBF4{GID: g.ID, PDAT: entry})...)
 	b = append(b, gmNotify(notifyPlayerClaimingReserv, &server.NotifyPlayerJoiningBF4{GID: g.ID, PDAT: entry})...)
-	b = append(b, extendedDataUpdateNotify(player.PersonaID)...)
+	b = append(b, extendedDataUpdateInGame(player.PersonaID, player.Address, g.ID)...)
 
 	if err := push(b); err != nil {
 		logger.Warn("GAMEMANAGER: notify host of game %d failed: %v", g.ID, err)
@@ -631,37 +967,55 @@ func handleClientUpdateMeshConnection(p blaze.Packet) []byte {
 	if err := gmTdfDecoder.Decode(p.Payload, &req); err != nil {
 		logger.Debug("GAMEMANAGER: updateMeshConnection decode stopped early: %v", err)
 	}
-	
+
 	if r := peerHostMeshUpdate(p, req); r != nil {
 		return r
 	}
+
 	pid := currentPersonaID()
 	reply := emptyReply(p)
+
+	logger.Info("GAMEMANAGER: updateMeshConnection GID=%d PID=%d STAT=%d", req.GID, pid, req.STAT)
 
 	if req.STAT == 2 {
 		server.Games.SetPlayerState(req.GID, pid, playerStateConnected)
 		logger.Info("GAMEMANAGER: updateMeshConnection GID=%d: %q CONNECTED to the host", req.GID, GetConsoleOnlineID())
+
 		connected := append(
 			gmNotify(notifyGamePlayerStateChange, &server.NotifyGamePlayerStateChange{GID: req.GID, PID: pid, STAT: playerStateConnected}),
-			gmNotify(notifyPlayerJoinCompleted, &server.NotifyPlayerJoinCompleted{GID: req.GID, PID: pid})...)
+			gmNotify(notifyPlayerJoinCompleted, &server.NotifyPlayerJoinCompleted{GID: req.GID, PID: pid})...,
+		)
+
 		for _, other := range server.Games.PlayerIDs(req.GID) {
 			if other != pid {
 				pushToPersona(other, connected)
 			}
 		}
+
 		return append(reply, connected...)
 	}
 
-	if server.Games.Leave(req.GID, pid) {
-		notifyPlayersOfRemoval(req.GID, pid)
+	logger.Warn("GAMEMANAGER: updateMeshConnection GID=%d PID=%d STAT=%d -> KEEPING PLAYER", req.GID, pid, req.STAT)
+
+	server.Games.SetPlayerState(req.GID, pid, playerStateConnected)
+
+	connected := append(
+		gmNotify(notifyGamePlayerStateChange, &server.NotifyGamePlayerStateChange{GID: req.GID, PID: pid, STAT: playerStateConnected}),
+		gmNotify(notifyPlayerJoinCompleted, &server.NotifyPlayerJoinCompleted{GID: req.GID, PID: pid})...,
+	)
+
+	for _, other := range server.Games.PlayerIDs(req.GID) {
+		if other != pid {
+			pushToPersona(other, connected)
+		}
 	}
-	logger.Info("GAMEMANAGER: updateMeshConnection GID=%d STAT=%d: %q could not connect to the host -> removed", req.GID, req.STAT, GetConsoleOnlineID())
-	return append(reply, gmNotify(notifyPlayerRemoved, &server.NotifyPlayerRemoved{GID: req.GID, PID: pid, REAS: removeReasonLeft})...)
+
+	return append(reply, connected...)
 }
 
 type finalizeGameCreationRequest struct {
 	GID  uint32 `tdf:"GID"`
-	NPSI string `tdf:"NPSI"` 
+	NPSI string `tdf:"NPSI"`
 	XNNC []byte `tdf:"XNNC"`
 	XSES []byte `tdf:"XSES"`
 }
@@ -679,6 +1033,10 @@ func handleClientFinalizeGameCreation(p blaze.Packet) []byte {
 		logger.Info("GAMEMANAGER: finalizeGameCreation GID=%d -> empty reply", req.GID)
 		return reply
 	}
+
+	mmMu.Lock()
+	delete(mmPeerPending, me)
+	mmMu.Unlock()
 
 	logger.Info("PEER: host %q finalized game %d (NPSI=%q) -> NotifyPlatformHostInitialized", GetConsoleOnlineID(), req.GID, req.NPSI)
 	return append(reply, gmNotify(notifyPlatformHostInit, &server.NotifyPlatformHostInitialized{
