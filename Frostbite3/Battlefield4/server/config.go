@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	LocaleEnUS = 1701729619
-	PingSite = "rs-prod-ps3"
+	LocaleEnUS      = 1701729619
+	PingSite        = "rs-prod-ps3"
 	ProtocolVersion = "5900"
 	DefaultGamePort = 25200
 	DefaultSettings = 0x52F
@@ -102,10 +102,11 @@ func (c GameConfig) toGame(defaultIP string) (*Game, error) {
 	if c.Mode == "" {
 		return nil, fmt.Errorf("no mode")
 	}
-	if strings.EqualFold(c.Level, SiegeLevel) {
-		if _, ok := SiegeModes[c.Mode]; !ok {
-			logger.Warn("SERVER: %q: mode %q isn't one of MP_Siege's modes", c.Name, c.Mode)
-		}
+
+	if setup, err := EBXWorld().Setup(c.Level, c.Mode); err != nil {
+		logger.Warn("SERVER: %q: %v", c.Name, err)
+	} else {
+		logger.Debug("SERVER: %q EBX %s", c.Name, setup)
 	}
 	if c.MaxPlayers == 0 {
 		c.MaxPlayers = 24
