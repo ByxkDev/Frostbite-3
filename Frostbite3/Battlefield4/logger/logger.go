@@ -159,7 +159,7 @@ func HexDump(level Level, label string, data []byte) {
 		chunk := data[off:end]
 
 		var hex strings.Builder
-		for i := 0; i < 16; i++ {
+		for i := range 16 {
 			if i < len(chunk) {
 				fmt.Fprintf(&hex, "%02X ", chunk[i])
 			} else {
@@ -266,7 +266,7 @@ func Equal(label string, a, b []byte) bool {
 	}
 
 	diff := n
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if a[i] != b[i] {
 			diff = i
 			break
