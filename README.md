@@ -342,7 +342,6 @@ Development relies on information from the original PS3 client:
 16. Gameplay between players: playable multiplayer match
 17. Game reporting, stats updates and leaderboards
 18. Friends, presence, platoons
-19. RPCN integration
 
 ---
 
