@@ -242,8 +242,6 @@ Frostbite-3/
         ├── logger/
         ├── utilities/              # PreAuth / Ping / FetchClientConfig builders
         ├── cmd/                    # side tools (bf4host, fetchcdn, ps3read, ...)
-        ├── tools/re/               # reverse-engineering helper scripts
-        ├── docs/                   # protocol notes
         │
         └── data/                   # runtime data + EBX data  (NOT INCLUDED)
 ```
